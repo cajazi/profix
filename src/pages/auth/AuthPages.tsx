@@ -322,10 +322,10 @@ export function VerifyOTPPage() {
       let result;
       if (method === "email") {
         result = await supabase.auth.verifyOtp({
-          email: identifier,
-          token: otp,
-          type: flow === "register" ? "signup" : "magiclink",
-        });
+        email: identifier,
+        token: otp,
+        type: "magiclink",
+      });
       } else {
         result = await supabase.auth.verifyOtp({
           phone: identifier,

@@ -351,7 +351,7 @@ export function VerifyOTPPage() {
     if (resendCooldown > 0) return;
     if (method === "email") {
       await supabase.auth.resend({
-        type: flow === "register" ? "signup" : "magiclink",
+        type: "signup",
         email: identifier,
       });
     } else {

@@ -6,11 +6,11 @@ import { supabase } from "./lib/supabase";
 import { useAuthStore, useNotificationStore } from "./store/auth.store";
 import { Loader2 } from "lucide-react";
 
-// ─── Eager loaded (critical path) ────────────────────────────
+// ─── Eager loaded ─────────────────────────────────────────────
 import { LoginPage, RegisterPage, VerifyOTPPage } from "./pages/auth/AuthPages";
 import { ProtectedRoute, RoleGuard, Layout } from "./components/layout/Layout";
 
-// ─── Lazy loaded (code splitting) ────────────────────────────
+// ─── Lazy loaded ──────────────────────────────────────────────
 const DashboardPage = lazy(() =>
   import("./pages/dashboard/DashboardPage").then((m) => ({ default: m.DashboardPage }))
 );
@@ -50,11 +50,14 @@ const PrivacyPolicyPage = lazy(() =>
 const TermsOfServicePage = lazy(() =>
   import("./pages/legal/LegalPages").then((m) => ({ default: m.TermsOfServicePage }))
 );
+const AccountDeletionPage = lazy(() =>
+  import("./pages/legal/LegalPages").then((m) => ({ default: m.AccountDeletionPage }))
+);
 const AdminPage = lazy(() =>
   import("./pages/admin/AdminPage").then((m) => ({ default: m.AdminPage }))
 );
-const AccountDeletionPage = lazy(() =>
-  import("./pages/legal/LegalPages").then((m) => ({ default: m.AccountDeletionPage }))
+const ProfilePage = lazy(() =>
+  import("./pages/profile/ProfilePage").then((m) => ({ default: m.ProfilePage }))
 );
 
 // ─── Query client ─────────────────────────────────────────────
@@ -72,7 +75,6 @@ const queryClient = new QueryClient({
   },
 });
 
-// ─── Page loader ──────────────────────────────────────────────
 function PageLoader() {
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -88,7 +90,6 @@ export default function App() {
   const { setSession, profile } = useAuthStore();
   const { addNotification, setNotifications } = useNotificationStore();
 
-  // ─── Auth init ────────────────────────────────────────────
   useEffect(() => {
     let mounted = true;
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -100,7 +101,6 @@ export default function App() {
     return () => { mounted = false; subscription.unsubscribe(); };
   }, [setSession]);
 
-  // ─── Realtime notifications ───────────────────────────────
   useEffect(() => {
     if (!profile?.id) return;
     let mounted = true;
@@ -159,13 +159,16 @@ export default function App() {
                 <Route path="/contracts/:id/pay" element={<PaymentPage />} />
                 <Route path="/contracts/:id/dispute" element={<DisputePage />} />
 
-                {/* Wallet & KYC */}
+                {/* Wallet, KYC, Profile */}
                 <Route path="/wallet" element={<WalletPage />} />
                 <Route path="/kyc" element={<KYCPage />} />
+                <Route path="/profile" element={<ProfilePage />} />
+
+                {/* Admin */}
+                <Route path="/admin" element={<AdminPage />} />
 
                 {/* Play Store */}
                 <Route path="/delete-account" element={<AccountDeletionPage />} />
-                <Route path="/admin" element={<AdminPage />} />
 
                 {/* Owner only */}
                 <Route element={<RoleGuard allowedRoles={["owner"]} />}>

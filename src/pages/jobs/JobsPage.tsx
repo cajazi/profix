@@ -297,7 +297,7 @@ export function PostJobPage() {
       for (let i = 0; i < images.length; i++) {
         const file = images[i];
         const ext = file.name.split(".").pop();
-        const path = `jobs/${profile.id}/${Date.now()}_${i}.${ext}`;
+        const path = `${profile.id}/${Date.now()}_${i}.${ext}`;
         const { error: uploadErr } = await supabase.storage
           .from("job-media")
           .upload(path, file, { upsert: false });
@@ -312,7 +312,7 @@ export function PostJobPage() {
       let videoUrl: string | null = null;
       if (video) {
         const ext = video.name.split(".").pop();
-        const path = `jobs/${profile.id}/${Date.now()}_video.${ext}`;
+        const path = `${profile.id}/${Date.now()}_video.${ext}`;
         const { error: videoErr } = await supabase.storage
           .from("job-media")
           .upload(path, video, { upsert: false });

@@ -50,6 +50,9 @@ const PrivacyPolicyPage = lazy(() =>
 const TermsOfServicePage = lazy(() =>
   import("./pages/legal/LegalPages").then((m) => ({ default: m.TermsOfServicePage }))
 );
+const AdminPage = lazy(() =>
+  import("./pages/admin/AdminPage").then((m) => ({ default: m.AdminPage }))
+);
 const AccountDeletionPage = lazy(() =>
   import("./pages/legal/LegalPages").then((m) => ({ default: m.AccountDeletionPage }))
 );
@@ -162,6 +165,7 @@ export default function App() {
 
                 {/* Play Store */}
                 <Route path="/delete-account" element={<AccountDeletionPage />} />
+                <Route path="/admin" element={<AdminPage />} />
 
                 {/* Owner only */}
                 <Route element={<RoleGuard allowedRoles={["owner"]} />}>

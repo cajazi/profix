@@ -6,61 +6,27 @@ import { supabase } from "./lib/supabase";
 import { useAuthStore, useNotificationStore } from "./store/auth.store";
 import { Loader2 } from "lucide-react";
 
-// ─── Eager loaded ─────────────────────────────────────────────
 import { LoginPage, RegisterPage, VerifyOTPPage } from "./pages/auth/AuthPages";
 import { ProtectedRoute, RoleGuard, Layout } from "./components/layout/Layout";
 
-// ─── Lazy loaded ──────────────────────────────────────────────
-const DashboardPage = lazy(() =>
-  import("./pages/dashboard/DashboardPage").then((m) => ({ default: m.DashboardPage }))
-);
-const JobsPage = lazy(() =>
-  import("./pages/jobs/JobsPage").then((m) => ({ default: m.JobsPage }))
-);
-const PostJobPage = lazy(() =>
-  import("./pages/jobs/JobsPage").then((m) => ({ default: m.PostJobPage }))
-);
-const JobDetailPage = lazy(() =>
-  import("./pages/jobs/JobDetailPage").then((m) => ({ default: m.JobDetailPage }))
-);
-const ChatPage = lazy(() =>
-  import("./pages/chat/ChatPage").then((m) => ({ default: m.ChatPage }))
-);
-const ContractPage = lazy(() =>
-  import("./pages/contracts/ContractPage").then((m) => ({ default: m.ContractPage }))
-);
-const PaymentPage = lazy(() =>
-  import("./pages/payments/PaymentPage").then((m) => ({ default: m.PaymentPage }))
-);
-const PaymentCallbackPage = lazy(() =>
-  import("./pages/payments/PaymentPage").then((m) => ({ default: m.PaymentCallbackPage }))
-);
-const DisputePage = lazy(() =>
-  import("./pages/disputes/DisputePage").then((m) => ({ default: m.DisputePage }))
-);
-const WalletPage = lazy(() =>
-  import("./pages/wallet/WalletPage").then((m) => ({ default: m.WalletPage }))
-);
-const KYCPage = lazy(() =>
-  import("./pages/kyc/KYCPage").then((m) => ({ default: m.KYCPage }))
-);
-const PrivacyPolicyPage = lazy(() =>
-  import("./pages/legal/LegalPages").then((m) => ({ default: m.PrivacyPolicyPage }))
-);
-const TermsOfServicePage = lazy(() =>
-  import("./pages/legal/LegalPages").then((m) => ({ default: m.TermsOfServicePage }))
-);
-const AccountDeletionPage = lazy(() =>
-  import("./pages/legal/LegalPages").then((m) => ({ default: m.AccountDeletionPage }))
-);
-const AdminPage = lazy(() =>
-  import("./pages/admin/AdminPage").then((m) => ({ default: m.AdminPage }))
-);
-const ProfilePage = lazy(() =>
-  import("./pages/profile/ProfilePage").then((m) => ({ default: m.ProfilePage }))
-);
+const DashboardPage = lazy(() => import("./pages/dashboard/DashboardPage").then((m) => ({ default: m.DashboardPage })));
+const JobsPage = lazy(() => import("./pages/jobs/JobsPage").then((m) => ({ default: m.JobsPage })));
+const PostJobPage = lazy(() => import("./pages/jobs/JobsPage").then((m) => ({ default: m.PostJobPage })));
+const JobDetailPage = lazy(() => import("./pages/jobs/JobDetailPage").then((m) => ({ default: m.JobDetailPage })));
+const ChatPage = lazy(() => import("./pages/chat/ChatPage").then((m) => ({ default: m.ChatPage })));
+const ContractPage = lazy(() => import("./pages/contracts/ContractPage").then((m) => ({ default: m.ContractPage })));
+const PaymentPage = lazy(() => import("./pages/payments/PaymentPage").then((m) => ({ default: m.PaymentPage })));
+const PaymentCallbackPage = lazy(() => import("./pages/payments/PaymentPage").then((m) => ({ default: m.PaymentCallbackPage })));
+const DisputePage = lazy(() => import("./pages/disputes/DisputePage").then((m) => ({ default: m.DisputePage })));
+const WalletPage = lazy(() => import("./pages/wallet/WalletPage").then((m) => ({ default: m.WalletPage })));
+const KYCPage = lazy(() => import("./pages/kyc/KYCPage").then((m) => ({ default: m.KYCPage })));
+const PrivacyPolicyPage = lazy(() => import("./pages/legal/LegalPages").then((m) => ({ default: m.PrivacyPolicyPage })));
+const TermsOfServicePage = lazy(() => import("./pages/legal/LegalPages").then((m) => ({ default: m.TermsOfServicePage })));
+const AccountDeletionPage = lazy(() => import("./pages/legal/LegalPages").then((m) => ({ default: m.AccountDeletionPage })));
+const AdminPage = lazy(() => import("./pages/admin/AdminPage").then((m) => ({ default: m.AdminPage })));
+const ProfilePage = lazy(() => import("./pages/profile/ProfilePage").then((m) => ({ default: m.ProfilePage })));
+const NotificationsPage = lazy(() => import("./pages/notifications/NotificationsPage").then((m) => ({ default: m.NotificationsPage })));
 
-// ─── Query client ─────────────────────────────────────────────
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -133,7 +99,6 @@ export default function App() {
       <BrowserRouter>
         <Suspense fallback={<PageLoader />}>
           <Routes>
-            {/* ─── Public ───────────────────────────────── */}
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/verify-otp" element={<VerifyOTPPage />} />
@@ -141,37 +106,23 @@ export default function App() {
             <Route path="/privacy" element={<PrivacyPolicyPage />} />
             <Route path="/terms" element={<TermsOfServicePage />} />
 
-            {/* ─── Protected ────────────────────────────── */}
             <Route element={<ProtectedRoute />}>
               <Route element={<Layout />}>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<DashboardPage />} />
-
-                {/* Jobs */}
                 <Route path="/jobs" element={<JobsPage />} />
                 <Route path="/jobs/:id" element={<JobDetailPage />} />
-
-                {/* Chat */}
                 <Route path="/chat/:roomId" element={<ChatPage />} />
-
-                {/* Contracts */}
                 <Route path="/contracts/:id" element={<ContractPage />} />
                 <Route path="/contracts/:id/pay" element={<PaymentPage />} />
                 <Route path="/contracts/:id/dispute" element={<DisputePage />} />
-
-                {/* Wallet, KYC, Profile */}
                 <Route path="/wallet" element={<WalletPage />} />
                 <Route path="/kyc" element={<KYCPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
-
-                {/* Admin */}
+                <Route path="/notifications" element={<NotificationsPage />} />
                 <Route path="/admin" element={<AdminPage />} />
-
-                {/* Play Store */}
                 <Route path="/delete-account" element={<AccountDeletionPage />} />
-
-                {/* Owner only */}
-                <Route element={<RoleGuard allowedRoles={["owner"]} />}>
+                <Route element={<RoleGuard allowedRoles={["owner", "admin"]} />}>
                   <Route path="/jobs/post" element={<PostJobPage />} />
                 </Route>
               </Route>

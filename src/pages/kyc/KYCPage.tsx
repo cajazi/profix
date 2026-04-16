@@ -1,13 +1,13 @@
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { supabase } from "../../lib/supabase";
 import { useAuthStore } from "../../store/auth.store";
 import {
-  ShieldCheck, ShieldAlert, Clock, Loader2,
-  CheckCircle, XCircle, Upload
+  ShieldCheck, CheckCircle, Loader2,
+  Upload, X, AlertTriangle, Image as ImageIcon
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { cn } from "../../lib/utils";
@@ -15,16 +15,22 @@ import { cn } from "../../lib/utils";
 const kycSchema = z.object({
   full_name: z.string().min(2, "Full name required"),
   date_of_birth: z.string().min(1, "Date of birth required"),
-  id_type: z.enum(["nin", "bvn", "passport", "drivers_license"], {
-    required_error: "ID type required",
-  }),
+  id_type: z.enum(["nin", "bvn", "passport", "drivers_license"]),
   id_number: z.string().min(5, "ID number required"),
 });
-
 type KYCForm = z.infer<typeof kycSchema>;
 
 export function KYCPage() {
-  const { profile } = useAuthStore();
+  const { profile, fetchProfile } = useAuthStore();
+  const queryClient = useQueryClient();
+  const [selfie, setSelfie] = useState<File | null>(null);
+  const [idFront, setIdFront] = useState<File | null>(null);
+  const [idBack, setIdBack] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
+
+  const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+  const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
   const { data: kyc, isLoading } = useQuery({
     queryKey: ["kyc", profile?.id],
@@ -39,15 +45,88 @@ export function KYCPage() {
     },
   });
 
-  const { register, handleSubmit, formState: { errors } } = useForm<KYCForm>({
+  const { register, handleSubmit, watch, formState: { errors } } = useForm<KYCForm>({
     resolver: zodResolver(kycSchema),
     defaultValues: {
       full_name: profile?.full_name || "",
+      id_type: "nin",
     },
   });
 
+  const idType = watch("id_type");
+
+  const validateFile = (file: File, field: string): boolean => {
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      setFileErrors((prev) => ({ ...prev, [field]: "Only JPG, PNG, WEBP allowed" }));
+      return false;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      setFileErrors((prev) => ({ ...prev, [field]: "File must be under 5MB" }));
+      return false;
+    }
+    setFileErrors((prev) => ({ ...prev, [field]: "" }));
+    return true;
+  };
+
+  const handleFileChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    setter: (f: File | null) => void,
+    field: string
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (validateFile(file, field)) setter(file);
+  };
+
+  const uploadFile = async (file: File, path: string): Promise<string> => {
+    const { error } = await supabase.storage
+      .from("kyc-documents")
+      .upload(path, file, { upsert: true });
+    if (error) throw new Error(`Upload failed: ${error.message}`);
+
+    const { data } = await supabase.storage
+      .from("kyc-documents")
+      .createSignedUrl(path, 60 * 60 * 24 * 365); // 1 year signed URL
+    return data?.signedUrl || "";
+  };
+
   const submitMutation = useMutation({
     mutationFn: async (data: KYCForm) => {
+      if (!selfie) throw new Error("Selfie photo is required");
+      if (!idFront) throw new Error("ID front photo is required");
+
+      setUploadProgress(10);
+      const uid = profile!.id;
+      const ts = Date.now();
+
+      // Upload selfie
+      const selfieExt = selfie.name.split(".").pop();
+      const selfieUrl = await uploadFile(
+        selfie,
+        `${uid}/${ts}_selfie.${selfieExt}`
+      );
+      setUploadProgress(35);
+
+      // Upload ID front
+      const frontExt = idFront.name.split(".").pop();
+      const idFrontUrl = await uploadFile(
+        idFront,
+        `${uid}/${ts}_id_front.${frontExt}`
+      );
+      setUploadProgress(60);
+
+      // Upload ID back (optional)
+      let idBackUrl = "";
+      if (idBack) {
+        const backExt = idBack.name.split(".").pop();
+        idBackUrl = await uploadFile(
+          idBack,
+          `${uid}/${ts}_id_back.${backExt}`
+        );
+      }
+      setUploadProgress(80);
+
+      // Submit to edge function
       const session = (await supabase.auth.getSession()).data.session;
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/submit-kyc`,
@@ -57,53 +136,30 @@ export function KYCPage() {
             Authorization: `Bearer ${session?.access_token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(data),
+          body: JSON.stringify({
+            ...data,
+            selfie_url: selfieUrl,
+            id_front_url: idFrontUrl,
+            id_back_url: idBackUrl || null,
+          }),
         }
       );
+
       const json = await res.json();
       if (!res.ok) throw new Error(json.error);
+      setUploadProgress(100);
       return json;
     },
     onSuccess: () => {
-      toast.success("KYC submitted! We will review within 24 hours.");
+      toast.success("KYC submitted! Review takes up to 24 hours.");
+      fetchProfile();
+      queryClient.invalidateQueries({ queryKey: ["kyc"] });
     },
-    onError: (err) => toast.error((err as Error).message),
+    onError: (err) => {
+      setUploadProgress(0);
+      toast.error((err as Error).message);
+    },
   });
-
-  const STATUS_CONFIG = {
-    pending: {
-      label: "Under Review",
-      color: "text-amber-400",
-      bg: "bg-amber-400/10",
-      border: "border-amber-500/30",
-      icon: Clock,
-      desc: "Your documents are being reviewed. This takes up to 24 hours.",
-    },
-    verified: {
-      label: "Verified",
-      color: "text-emerald-400",
-      bg: "bg-emerald-400/10",
-      border: "border-emerald-500/30",
-      icon: CheckCircle,
-      desc: "Your identity has been verified. You have full access to ProFix.",
-    },
-    rejected: {
-      label: "Rejected",
-      color: "text-red-400",
-      bg: "bg-red-400/10",
-      border: "border-red-500/30",
-      icon: XCircle,
-      desc: "Your KYC was rejected. Please resubmit with correct documents.",
-    },
-    expired: {
-      label: "Expired",
-      color: "text-slate-400",
-      bg: "bg-slate-800",
-      border: "border-slate-700",
-      icon: Clock,
-      desc: "Your KYC has expired. Please resubmit.",
-    },
-  };
 
   if (isLoading) {
     return (
@@ -113,213 +169,302 @@ export function KYCPage() {
     );
   }
 
-  const status = kyc?.status as keyof typeof STATUS_CONFIG | undefined;
-  const config = status ? STATUS_CONFIG[status] : null;
-
   return (
-    <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-white text-2xl font-bold flex items-center gap-2">
-          <ShieldCheck className="w-7 h-7 text-indigo-400" />
-          KYC Verification
-        </h1>
-        <p className="text-slate-400 text-sm mt-1">
-          Verify your identity to unlock all ProFix features including
-          payments and withdrawals
+    <div className="max-w-lg mx-auto px-4 py-6 sm:py-8">
+      <div className="mb-6">
+        <h1 className="text-white text-2xl font-bold">KYC Verification</h1>
+        <p className="text-slate-400 text-sm mt-0.5">
+          Verify your identity to unlock all ProFix features including payments and withdrawals
         </p>
       </div>
 
-      {/* What KYC unlocks */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-        <p className="text-white font-medium mb-3">KYC unlocks:</p>
-        <div className="space-y-2">
-          {[
-            "✅ Post and accept jobs",
-            "✅ Receive payments to your wallet",
-            "✅ Withdraw earnings to your bank",
-            "✅ Higher transaction limits",
-          ].map((item) => (
-            <p key={item} className="text-slate-300 text-sm">{item}</p>
-          ))}
-        </div>
-      </div>
-
-      {/* Current status */}
-      {kyc && config && (
+      {/* Status banner */}
+      {kyc && (
         <div className={cn(
-          "flex items-start gap-3 rounded-xl p-4 border",
-          config.bg, config.border
+          "flex items-center gap-3 rounded-xl px-4 py-3 mb-6 border",
+          kyc.status === "verified"
+            ? "bg-emerald-500/10 border-emerald-500/30"
+            : kyc.status === "pending"
+            ? "bg-amber-500/10 border-amber-500/30"
+            : "bg-red-500/10 border-red-500/30"
         )}>
-          <config.icon className={cn("w-5 h-5 flex-shrink-0 mt-0.5", config.color)} />
+          {kyc.status === "verified" && <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0" />}
+          {kyc.status === "pending" && <Loader2 className="w-5 h-5 text-amber-400 animate-spin flex-shrink-0" />}
+          {kyc.status === "rejected" && <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />}
           <div>
-            <p className={cn("font-semibold text-sm", config.color)}>
-              KYC Status: {config.label}
+            <p className={cn("font-semibold text-sm",
+              kyc.status === "verified" ? "text-emerald-400" :
+              kyc.status === "pending" ? "text-amber-400" : "text-red-400"
+            )}>
+              {kyc.status === "verified" && "KYC Verified ✅"}
+              {kyc.status === "pending" && "Under Review — check back in 24 hours"}
+              {kyc.status === "rejected" && "KYC Rejected — please resubmit"}
             </p>
-            <p className="text-slate-400 text-sm mt-0.5">{config.desc}</p>
             {kyc.rejection_reason && (
-              <p className="text-red-400 text-xs mt-1">
-                Reason: {kyc.rejection_reason}
-              </p>
+              <p className="text-red-300 text-xs mt-0.5">{kyc.rejection_reason}</p>
             )}
           </div>
         </div>
       )}
 
-      {/* Show form if not verified or pending */}
-      {(!kyc || kyc.status === "rejected" || kyc.status === "expired") && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+      {/* Benefits */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-6">
+        <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
+          <ShieldCheck className="w-5 h-5 text-indigo-400" />
+          KYC unlocks:
+        </h3>
+        <div className="space-y-2">
+          {[
+            "Post and accept jobs",
+            "Receive payments to your wallet",
+            "Withdraw earnings to your bank",
+            "Higher transaction limits",
+          ].map((b) => (
+            <div key={b} className="flex items-center gap-2 text-sm text-slate-400">
+              <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+              {b}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Form */}
+      {(!kyc || kyc.status === "rejected") && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6">
           <h2 className="text-white font-semibold mb-5">
             Submit Verification Documents
           </h2>
 
           <form
             onSubmit={handleSubmit((d) => submitMutation.mutate(d))}
-            className="space-y-5"
+            className="space-y-4"
           >
+            {/* Full name */}
             <div>
               <label className="block text-slate-300 text-sm font-medium mb-2">
-                Full name (as on ID) *
+                Full legal name <span className="text-red-400">*</span>
               </label>
               <input
                 {...register("full_name")}
-                placeholder="John Adeyemi"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="As it appears on your ID"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
               />
-              {errors.full_name && (
-                <p className="text-red-400 text-xs mt-1">
-                  {errors.full_name.message}
-                </p>
-              )}
+              {errors.full_name && <p className="text-red-400 text-xs mt-1">{errors.full_name.message}</p>}
             </div>
 
+            {/* Date of birth */}
             <div>
               <label className="block text-slate-300 text-sm font-medium mb-2">
-                Date of birth *
+                Date of birth <span className="text-red-400">*</span>
               </label>
               <input
                 {...register("date_of_birth")}
                 type="date"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
               />
-              {errors.date_of_birth && (
-                <p className="text-red-400 text-xs mt-1">
-                  {errors.date_of_birth.message}
-                </p>
-              )}
+              {errors.date_of_birth && <p className="text-red-400 text-xs mt-1">{errors.date_of_birth.message}</p>}
             </div>
 
+            {/* ID type + number */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-slate-300 text-sm font-medium mb-2">
+                  ID type <span className="text-red-400">*</span>
+                </label>
+                <select
+                  {...register("id_type")}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                >
+                  <option value="nin">National ID (NIN)</option>
+                  <option value="bvn">BVN</option>
+                  <option value="passport">International Passport</option>
+                  <option value="drivers_license">Driver's License</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-slate-300 text-sm font-medium mb-2">
+                  ID number <span className="text-red-400">*</span>
+                </label>
+                <input
+                  {...register("id_number")}
+                  placeholder={idType === "nin" || idType === "bvn" ? "11 digits" : "Enter number"}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                />
+                {errors.id_number && <p className="text-red-400 text-xs mt-1">{errors.id_number.message}</p>}
+              </div>
+            </div>
+
+            {/* Selfie upload */}
             <div>
               <label className="block text-slate-300 text-sm font-medium mb-2">
-                ID type *
+                Selfie photo <span className="text-red-400">*</span>
+                <span className="text-slate-500 font-normal ml-1">(hold your ID)</span>
               </label>
-              <select
-                {...register("id_type")}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              <div
+                className={cn(
+                  "border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition",
+                  selfie ? "border-emerald-500/50 bg-emerald-500/5" : "border-slate-700 hover:border-slate-600"
+                )}
+                onClick={() => document.getElementById("selfie-upload")?.click()}
               >
-                <option value="">Select ID type</option>
-                <option value="nin">NIN (National ID Number)</option>
-                <option value="bvn">BVN (Bank Verification Number)</option>
-                <option value="passport">International Passport</option>
-                <option value="drivers_license">Driver's License</option>
-              </select>
-              {errors.id_type && (
-                <p className="text-red-400 text-xs mt-1">
-                  {errors.id_type.message}
-                </p>
-              )}
+                <input
+                  id="selfie-upload"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="sr-only"
+                  onChange={(e) => handleFileChange(e, setSelfie, "selfie")}
+                />
+                {selfie ? (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={URL.createObjectURL(selfie)}
+                        className="w-12 h-12 rounded-lg object-cover"
+                        alt="selfie"
+                      />
+                      <p className="text-emerald-400 text-sm truncate max-w-48">{selfie.name}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setSelfie(null); }}
+                      className="text-red-400 hover:text-red-300 transition"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <ImageIcon className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+                    <p className="text-slate-400 text-sm">Click to upload selfie</p>
+                    <p className="text-slate-500 text-xs mt-1">JPG, PNG, WEBP — max 5MB</p>
+                  </>
+                )}
+              </div>
+              {fileErrors.selfie && <p className="text-red-400 text-xs mt-1">{fileErrors.selfie}</p>}
             </div>
 
+            {/* ID front */}
             <div>
               <label className="block text-slate-300 text-sm font-medium mb-2">
-                ID number *
+                ID front <span className="text-red-400">*</span>
               </label>
-              <input
-                {...register("id_number")}
-                placeholder="Enter your ID number"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-              {errors.id_number && (
-                <p className="text-red-400 text-xs mt-1">
-                  {errors.id_number.message}
+              <div
+                className={cn(
+                  "border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition",
+                  idFront ? "border-emerald-500/50 bg-emerald-500/5" : "border-slate-700 hover:border-slate-600"
+                )}
+                onClick={() => document.getElementById("id-front-upload")?.click()}
+              >
+                <input
+                  id="id-front-upload"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="sr-only"
+                  onChange={(e) => handleFileChange(e, setIdFront, "idFront")}
+                />
+                {idFront ? (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={URL.createObjectURL(idFront)}
+                        className="w-12 h-12 rounded-lg object-cover"
+                        alt="id front"
+                      />
+                      <p className="text-emerald-400 text-sm truncate max-w-48">{idFront.name}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setIdFront(null); }}
+                      className="text-red-400 hover:text-red-300 transition"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <Upload className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+                    <p className="text-slate-400 text-sm">Click to upload ID front</p>
+                    <p className="text-slate-500 text-xs mt-1">JPG, PNG, WEBP — max 5MB</p>
+                  </>
+                )}
+              </div>
+              {fileErrors.idFront && <p className="text-red-400 text-xs mt-1">{fileErrors.idFront}</p>}
+            </div>
+
+            {/* ID back (optional) */}
+            <div>
+              <label className="block text-slate-300 text-sm font-medium mb-2">
+                ID back
+                <span className="text-slate-500 font-normal ml-1">(optional)</span>
+              </label>
+              <div
+                className={cn(
+                  "border border-dashed rounded-xl px-4 py-3 flex items-center gap-3 cursor-pointer transition",
+                  idBack ? "border-emerald-500/40 bg-emerald-500/5" : "border-slate-700 hover:border-slate-600"
+                )}
+                onClick={() => document.getElementById("id-back-upload")?.click()}
+              >
+                <input
+                  id="id-back-upload"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="sr-only"
+                  onChange={(e) => handleFileChange(e, setIdBack, "idBack")}
+                />
+                <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center flex-shrink-0">
+                  <Upload className="w-4 h-4 text-slate-400" />
+                </div>
+                <p className={cn("text-sm flex-1", idBack ? "text-emerald-400" : "text-slate-400")}>
+                  {idBack ? idBack.name : "Upload ID back (optional)"}
                 </p>
-              )}
+                {idBack && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setIdBack(null); }}
+                    className="text-red-400 hover:text-red-300 transition flex-shrink-0"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              {fileErrors.idBack && <p className="text-red-400 text-xs mt-1">{fileErrors.idBack}</p>}
             </div>
 
-            <div className="bg-slate-800 border border-dashed border-slate-600 rounded-xl p-4 text-center">
-              <Upload className="w-8 h-8 text-slate-500 mx-auto mb-2" />
-              <p className="text-slate-400 text-sm">
-                Document upload coming soon
-              </p>
-              <p className="text-slate-500 text-xs mt-1">
-                For now submit your ID details above
-              </p>
+            {/* Upload progress */}
+            {uploadProgress > 0 && uploadProgress < 100 && (
+              <div>
+                <div className="flex justify-between text-xs text-slate-400 mb-1">
+                  <span>Uploading documents…</span>
+                  <span>{uploadProgress}%</span>
+                </div>
+                <div className="w-full bg-slate-800 rounded-full h-1.5">
+                  <div
+                    className="bg-indigo-500 h-1.5 rounded-full transition-all"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Privacy note */}
+            <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-3 text-indigo-300 text-xs">
+              🔒 Your documents are encrypted and stored securely. Only our verification
+              team can access them. We never share your data with third parties.
             </div>
 
-            <div className="bg-blue-500/10 border border-blue-500/20 rounded-xl p-3">
-              <p className="text-blue-400 text-xs">
-                🔒 Your information is encrypted and stored securely.
-                We only use it for identity verification purposes.
-              </p>
-            </div>
-
+            {/* Submit */}
             <button
               type="submit"
               disabled={submitMutation.isPending}
               className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold py-3 rounded-xl transition flex items-center justify-center gap-2"
             >
               {submitMutation.isPending ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
+                <><Loader2 className="w-5 h-5 animate-spin" /> Submitting…</>
               ) : (
-                <>
-                  <ShieldCheck className="w-5 h-5" />
-                  Submit for Verification
-                </>
+                <><ShieldCheck className="w-5 h-5" /> Submit for Verification</>
               )}
             </button>
           </form>
-        </div>
-      )}
-
-      {/* Verified state */}
-      {kyc?.status === "verified" && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
-          <CheckCircle className="w-16 h-16 text-emerald-400 mx-auto mb-3" />
-          <h2 className="text-white text-xl font-bold mb-2">
-            Identity Verified ✅
-          </h2>
-          <p className="text-slate-400 text-sm">
-            Your identity has been verified. You have full access to
-            all ProFix features.
-          </p>
-          <div className="mt-4 grid grid-cols-2 gap-3 text-left">
-            <div className="bg-slate-800 rounded-xl p-3">
-              <p className="text-slate-400 text-xs">ID Type</p>
-              <p className="text-white text-sm font-medium capitalize">
-                {kyc.id_type?.replace("_", " ")}
-              </p>
-            </div>
-            <div className="bg-slate-800 rounded-xl p-3">
-              <p className="text-slate-400 text-xs">KYC Level</p>
-              <p className="text-white text-sm font-medium">
-                Level {kyc.level}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Pending state */}
-      {kyc?.status === "pending" && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center">
-          <Clock className="w-16 h-16 text-amber-400 mx-auto mb-3 animate-pulse" />
-          <h2 className="text-white text-xl font-bold mb-2">
-            Under Review
-          </h2>
-          <p className="text-slate-400 text-sm">
-            Your KYC documents are being reviewed. This typically takes
-            up to 24 hours. We will notify you once completed.
-          </p>
         </div>
       )}
     </div>

@@ -91,11 +91,7 @@ export function KYCPage() {
       .from("kyc-documents")
       .upload(path, file, { upsert: true });
     if (error) throw new Error(`Upload failed: ${error.message}`);
-    const { data } = await supabase.storage
-      .from("kyc-documents")
-      .createSignedUrl(path, 60 * 60 * 24 * 365);
-    if (!data?.signedUrl) throw new Error("Could not get file URL");
-    return data.signedUrl;
+    return path;
   };
 
   const submitMutation = useMutation({

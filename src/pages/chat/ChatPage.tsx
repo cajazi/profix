@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../../lib/supabase";
+import { ContractProposalModal } from "../../components/contracts/ContractProposalModal";
 import { useAuthStore } from "../../store/auth.store";
 import type { Message } from "../../types/database";
 import {
@@ -197,7 +198,17 @@ export function ChatPage() {
               <Lock className="w-3 h-3" /> Locked
             </span>
           )}
-          {isOwner && !room?.contract_id && (
+          {showContractModal && room && (
+  <ContractProposalModal
+    roomId={roomId!}
+    jobId={room.job_id}
+    workerId={room.worker_id}
+    onClose={() => setShowContractModal(false)}
+    onSuccess={() => setShowContractModal(false)}
+  />
+)}
+
+{isOwner && !room?.contract_id && (
             <button
               onClick={() => setShowContractModal(true)}
               className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm px-3 py-1.5 rounded-lg transition"

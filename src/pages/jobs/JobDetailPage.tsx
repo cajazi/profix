@@ -124,25 +124,40 @@ export function JobDetailPage() {
 
   const acceptApplicationMutation = useMutation({
     mutationFn: async (applicationId: string) => {
+      // Get application details first
+      const { data: app, error: appErr } = await supabase
+        .from("applications")
+        .select("worker_id")
+        .eq("id", applicationId)
+        .single();
+      if (appErr) throw appErr;
+
+      // Accept application
       const { error } = await supabase
         .from("applications")
         .update({ status: "accepted" })
         .eq("id", applicationId);
       if (error) throw error;
 
-      // Create chat room
-      const { data: app } = await supabase
-        .from("applications")
-        .select("worker_id")
-        .eq("id", applicationId)
-        .single();
+      // Check if chat room already exists
+      const { data: existingRoom } = await supabase
+        .from("chat_rooms")
+        .select("id")
+        .eq("job_id", id!)
+        .eq("owner_id", profile!.id)
+        .eq("worker_id", app.worker_id)
+        .maybeSingle();
 
-      if (app) {
-        await supabase.from("chat_rooms").insert({
-          job_id: id!,
-          owner_id: profile!.id,
-          worker_id: app.worker_id,
-        }).select().single();
+      // Create chat room only if it doesn't exist
+      if (!existingRoom) {
+        const { error: roomErr } = await supabase
+          .from("chat_rooms")
+          .insert({
+            job_id: id!,
+            owner_id: profile!.id,
+            worker_id: app.worker_id,
+          });
+        if (roomErr) throw roomErr;
       }
     },
     onSuccess: () => {

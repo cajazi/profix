@@ -435,7 +435,15 @@ export function JobDetailPage() {
 
                         {app.status === "accepted" && (
                           <button
-                            onClick={() => navigate(`/chat/${app.id}`)}
+                            onClick={async () => {
+                          const { data: room } = await supabase
+                            .from("chat_rooms")
+                            .select("id")
+                            .eq("job_id", id!)
+                            .eq("owner_id", profile!.id)
+                            .single();
+                          if (room) navigate(`/chat/${room.id}`);
+                        }}
                             className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg transition flex items-center gap-1"
                           >
                             <MessageCircle className="w-3 h-3" /> Open Chat

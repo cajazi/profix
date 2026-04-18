@@ -4,7 +4,7 @@ import {
 import { useAuthStore, useNotificationStore } from "../../store/auth.store";
 import {
   Bell, BriefcaseBusiness, LayoutDashboard,
-  LogOut, ShieldCheck, Loader2, Wallet, Menu, X
+  LogOut, ShieldCheck, Loader2, Wallet, Menu, X, FileText
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
@@ -20,6 +20,7 @@ export function Layout() {
     { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { to: "/jobs", label: "Jobs", icon: BriefcaseBusiness },
     { to: "/wallet", label: "Wallet", icon: Wallet },
+    { to: "/contracts", label: "Contracts", icon: FileText },
     ...(profile?.role === "admin"
       ? [{ to: "/admin", label: "Admin", icon: ShieldCheck }]
       : []),

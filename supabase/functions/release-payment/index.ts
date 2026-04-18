@@ -9,6 +9,69 @@ import {
   sendNotification,
 } from "../_shared/utils.ts";
 
+function calculateCommission(amount: number): {
+  rate: number;
+  commission: number;
+  net: number;
+} {
+  const rate =
+    amount <= 100000 ? 0.05
+    : amount <= 500000 ? 0.035
+    : amount <= 1000000 ? 0.025
+    : 0.01;
+  const commission = Math.floor(amount * rate);
+  return { rate, commission, net: amount - commission };
+}
+
+async function creditWorkerWallet(
+  db: any,
+  workerId: string,
+  amount: number,
+  contractId: string,
+  reference: string
+) {
+  const { rate, commission, net } = calculateCommission(amount);
+
+  const { data: wallet } = await db
+    .from("wallets")
+    .select("*")
+    .eq("user_id", workerId)
+    .single();
+
+  if (!wallet) {
+    console.error("Worker wallet not found for:", workerId);
+    return;
+  }
+
+  const newBalance = wallet.available_balance + net;
+
+  await db
+    .from("wallets")
+    .update({
+      available_balance: newBalance,
+      total_earned: wallet.total_earned + net,
+    })
+    .eq("id", wallet.id);
+
+  await db.from("wallet_transactions").insert({
+    wallet_id: wallet.id,
+    user_id: workerId,
+    type: "escrow_credit",
+    amount: net,
+    balance_before: wallet.available_balance,
+    balance_after: newBalance,
+    reference: `${reference}_wallet`,
+    description: `Payment received after ${(rate * 100).toFixed(1)}% commission (₦${commission.toLocaleString()})`,
+    contract_id: contractId,
+    metadata: {
+      gross_amount: amount,
+      commission_amount: commission,
+      commission_rate: rate,
+      net_amount: net,
+    },
+  });
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -47,7 +110,7 @@ serve(async (req: Request) => {
       .single();
 
     if (!contract) return errorResponse("Contract not found", 404);
-    if (contract.owner_id !== userId)
+    if (contract.owner_id !== userId && profile.role !== "admin")
       return errorResponse("You are not the owner of this contract", 403);
     if (contract.status !== "active")
       return errorResponse("Contract is not active");
@@ -64,6 +127,7 @@ serve(async (req: Request) => {
     let ledgerRef: string;
     let description: string;
 
+    // ── Milestone payment ──────────────────────────────────
     if (contract.payment_mode === "milestone" && milestone_id) {
       const { data: milestone } = await db
         .from("milestones")
@@ -75,7 +139,7 @@ serve(async (req: Request) => {
       if (!milestone) return errorResponse("Milestone not found", 404);
       if (milestone.status !== "submitted") {
         return errorResponse(
-          `Milestone must be submitted to release. Current: ${milestone.status}`
+          `Milestone must be submitted before release. Current: ${milestone.status}`
         );
       }
 
@@ -87,16 +151,17 @@ serve(async (req: Request) => {
         return errorResponse("Insufficient escrow balance for release");
       }
 
+      // Idempotency check
       const { data: existing } = await db
         .from("escrow_ledger")
         .select("id")
         .eq("reference", ledgerRef)
         .maybeSingle();
-
       if (existing) return errorResponse("Release already processed", 409);
 
       const newBalance = wallet.balance - releaseAmount;
 
+      // Update escrow wallet
       await db
         .from("escrow_wallets")
         .update({
@@ -105,6 +170,7 @@ serve(async (req: Request) => {
         })
         .eq("id", wallet.id);
 
+      // Log escrow ledger entry
       await db.from("escrow_ledger").insert({
         wallet_id: wallet.id,
         contract_id,
@@ -117,6 +183,7 @@ serve(async (req: Request) => {
         description,
       });
 
+      // Update milestone status
       await db
         .from("milestones")
         .update({
@@ -126,6 +193,7 @@ serve(async (req: Request) => {
         })
         .eq("id", milestone_id);
 
+      // Log transaction
       await db.from("transactions").insert({
         user_id: contract.worker_id,
         contract_id,
@@ -136,34 +204,38 @@ serve(async (req: Request) => {
         status: "success",
       });
 
+      // Credit worker wallet with commission deduction
+      await creditWorkerWallet(
+        db,
+        contract.worker_id,
+        releaseAmount,
+        contract_id,
+        ledgerRef
+      );
+
+      // Check if all milestones released
       const { data: allMilestones } = await db
         .from("milestones")
         .select("status")
         .eq("contract_id", contract_id);
 
-      const allReleased = allMilestones?.every(
-        (m) => m.status === "released"
-      );
-
+      const allReleased = allMilestones?.every((m: any) => m.status === "released");
       if (allReleased) {
-        await db
-          .from("contracts")
-          .update({ status: "completed" })
-          .eq("id", contract_id);
-        await db
-          .from("jobs")
-          .update({ status: "completed" })
-          .eq("id", contract.job_id);
+        await db.from("contracts").update({ status: "completed" }).eq("id", contract_id);
+        await db.from("jobs").update({ status: "completed" }).eq("id", contract.job_id);
       }
 
+      // Notify worker
       await sendNotification(db, {
         user_id: contract.worker_id,
         type: "payment_released",
-        title: "Payment Released 🎉",
-        body: `₦${releaseAmount.toLocaleString()} has been released for milestone: ${milestone.title}`,
+        title: "Milestone Payment Released 🎉",
+        body: `₦${releaseAmount.toLocaleString()} released for: ${milestone.title}`,
         data: { contract_id, milestone_id, amount: releaseAmount },
         action_url: `/contracts/${contract_id}`,
       });
+
+    // ── Full payment ───────────────────────────────────────
     } else if (contract.payment_mode === "full" && !milestone_id) {
       releaseAmount = wallet.balance;
       if (releaseAmount <= 0) return errorResponse("No balance to release");
@@ -171,6 +243,7 @@ serve(async (req: Request) => {
       ledgerRef = `release_full_${contract_id}_${Date.now()}`;
       description = "Full contract payment released";
 
+      // Update escrow wallet
       await db
         .from("escrow_wallets")
         .update({
@@ -179,6 +252,7 @@ serve(async (req: Request) => {
         })
         .eq("id", wallet.id);
 
+      // Log escrow ledger entry
       await db.from("escrow_ledger").insert({
         wallet_id: wallet.id,
         contract_id,
@@ -190,16 +264,11 @@ serve(async (req: Request) => {
         description,
       });
 
-      await db
-        .from("contracts")
-        .update({ status: "completed" })
-        .eq("id", contract_id);
+      // Complete contract and job
+      await db.from("contracts").update({ status: "completed" }).eq("id", contract_id);
+      await db.from("jobs").update({ status: "completed" }).eq("id", contract.job_id);
 
-      await db
-        .from("jobs")
-        .update({ status: "completed" })
-        .eq("id", contract.job_id);
-
+      // Log transaction
       await db.from("transactions").insert({
         user_id: contract.worker_id,
         contract_id,
@@ -209,6 +278,16 @@ serve(async (req: Request) => {
         status: "success",
       });
 
+      // Credit worker wallet with commission deduction
+      await creditWorkerWallet(
+        db,
+        contract.worker_id,
+        releaseAmount,
+        contract_id,
+        ledgerRef
+      );
+
+      // Notify worker
       await sendNotification(db, {
         user_id: contract.worker_id,
         type: "payment_released",
@@ -217,6 +296,7 @@ serve(async (req: Request) => {
         data: { contract_id, amount: releaseAmount },
         action_url: `/contracts/${contract_id}`,
       });
+
     } else {
       return errorResponse("Invalid release parameters");
     }
@@ -236,6 +316,7 @@ serve(async (req: Request) => {
       contract_id,
       milestone_id: milestone_id || null,
     });
+
   } catch (err) {
     await logAudit(db, {
       user_id: userId,

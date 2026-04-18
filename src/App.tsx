@@ -25,6 +25,9 @@ const TermsOfServicePage = lazy(() => import("./pages/legal/LegalPages").then((m
 const AccountDeletionPage = lazy(() => import("./pages/legal/LegalPages").then((m) => ({ default: m.AccountDeletionPage })));
 const AdminPage = lazy(() => import("./pages/admin/AdminPage").then((m) => ({ default: m.AdminPage })));
 const ProfilePage = lazy(() => import("./pages/profile/ProfilePage").then((m) => ({ default: m.ProfilePage })));
+const ContractsListPage = lazy(() =>
+  import("./pages/contracts/ContractsListPage").then((m) => ({ default: m.ContractsListPage }))
+);
 const NotificationsPage = lazy(() => import("./pages/notifications/NotificationsPage").then((m) => ({ default: m.NotificationsPage })));
 
 const queryClient = new QueryClient({
@@ -120,6 +123,7 @@ export default function App() {
                 <Route path="/kyc" element={<KYCPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
+                <Route path="/contracts" element={<ContractsListPage />} />
                 <Route path="/admin" element={<AdminPage />} />
                 <Route path="/delete-account" element={<AccountDeletionPage />} />
                 <Route element={<RoleGuard allowedRoles={["owner", "admin"]} />}>

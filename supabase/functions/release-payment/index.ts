@@ -29,7 +29,7 @@ serve(async (req: Request) => {
       .single();
 
     if (!profile) return errorResponse("User not found", 404);
-    if (profile.role !== "owner")
+    if (profile.role !== "owner" && profile.role !== "admin")
       return errorResponse("Only the job owner can release payments", 403);
     if (!profile.email_verified)
       return errorResponse("Email verification required", 403);

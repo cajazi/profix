@@ -24,7 +24,8 @@ const MILESTONE_STATUS_CONFIG = {
 };
 
 export function ContractPage() {
-  const { id } = useParams<{ id: string }>();
+  const { id: rawId } = useParams<{ id: string }>();
+const id = rawId?.replace(/['"]/g, "");
   const { profile } = useAuthStore();
   const navigate = useNavigate();
   const queryClient = useQueryClient();

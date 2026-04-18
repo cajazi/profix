@@ -45,7 +45,7 @@ serve(async (req: Request) => {
 
     if (profileErr || !profile) return errorResponse("User not found", 404);
     if (profile.is_banned) return errorResponse("Account suspended", 403);
-    if (profile.role !== "owner")
+    if (profile.role !== "owner" && profile.role !== "admin")
       return errorResponse("Only job owners can initiate payments", 403);
     if (!profile.email_verified) {
       return errorResponse(

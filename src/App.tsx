@@ -6,7 +6,7 @@ import { supabase } from "./lib/supabase";
 import { useAuthStore, useNotificationStore } from "./store/auth.store";
 import { Loader2 } from "lucide-react";
 
-import { LoginPage, RegisterPage, VerifyOTPPage } from "./pages/auth/AuthPages";
+import { LoginPage, RegisterPage, VerifyOTPPage, ForgotPINPage } from "./pages/auth/AuthPages";
 import { ProtectedRoute, RoleGuard, Layout } from "./components/layout/Layout";
 
 const DashboardPage = lazy(() => import("./pages/dashboard/DashboardPage").then((m) => ({ default: m.DashboardPage })));

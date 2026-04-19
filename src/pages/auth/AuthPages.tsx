@@ -503,6 +503,20 @@ export function LoginPage() {
               >
                 <ArrowLeft className="w-4 h-4" /> Use different account
               </button>
+
+              <Link
+                to="/forgot-pin"
+                className="block w-full text-center text-indigo-400 hover:text-indigo-300 text-sm transition"
+              >
+                Forgot PIN?
+              </Link>
+
+              <Link
+                to="/forgot-pin"
+                className="block w-full text-center text-indigo-400 hover:text-indigo-300 text-sm transition"
+              >
+                Forgot PIN?
+              </Link>
             </div>
           )}
 
@@ -849,7 +863,259 @@ export function RegisterPage() {
     </div>
   );
 }
+// ─── Forgot PIN Page ──────────────────────────────────────────
+export function ForgotPINPage() {
+  const navigate = useNavigate();
+  const [step, setStep] = useState<"email" | "otp" | "newpin">("email");
+  const [email, setEmail] = useState("");
+  const [otp, setOtp] = useState("");
+  const [pin, setPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [showPin, setShowPin] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [resendTimer, setResendTimer] = useState(0);
+  const [pinError, setPinError] = useState("");
 
+  useEffect(() => {
+    if (resendTimer > 0) {
+      const t = setTimeout(() => setResendTimer((p) => p - 1), 1000);
+      return () => clearTimeout(t);
+    }
+  }, [resendTimer]);
+
+  const sendOTP = async () => {
+    if (!email.trim()) return toast.error("Enter your email address");
+    setLoading(true);
+    try {
+      await supabase.auth.signInWithOtp({ email: email.trim() });
+      setStep("otp");
+      setResendTimer(60);
+      toast.success("Reset code sent to your email!");
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verifyOTP = async () => {
+    if (otp.length !== 6 || verifying) return;
+    setVerifying(true);
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        email: email.trim(),
+        token: otp,
+        type: "magiclink",
+      });
+      if (error) throw error;
+      setStep("newpin");
+      toast.success("Identity verified! Set your new PIN.");
+    } catch {
+      toast.error("Invalid or expired code. Try again.");
+      setOtp("");
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const validatePIN = (p: string): string | null => {
+    if (p.length !== 6) return "PIN must be 6 digits";
+    if (/^(\d)\1{5}$/.test(p)) return "PIN cannot be all same digits";
+    if (/^(012345|123456|234567|345678|456789|567890|098765|987654|876543|765432|654321|543210)$/.test(p))
+      return "PIN cannot be sequential";
+    return null;
+  };
+
+  const resetPIN = async () => {
+    const err = validatePIN(pin);
+    if (err) { setPinError(err); return; }
+    if (pin !== confirmPin) { setPinError("PINs do not match"); return; }
+    setPinError("");
+    setLoading(true);
+    try {
+      const pinHash = await hashPIN(pin);
+
+      // Update PIN hash in users table
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
+      await supabase.from("users")
+        .update({ pin_hash: pinHash })
+        .eq("id", user.id);
+
+      // Update Supabase password
+      await supabase.auth.updateUser({ password: pinHash });
+
+      // Trust this device
+      await trustDevice(user.id);
+
+      toast.success("PIN reset successfully! 🎉");
+      navigate("/dashboard");
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (otp.length === 6) verifyOTP();
+  }, [otp]);
+
+  return (
+    <div className="min-h-screen bg-slate-950 flex flex-col">
+      <AuthHeader>
+        {step === "email" && (
+          <>
+            <h1 className="text-white text-2xl font-bold mb-2">Reset your PIN</h1>
+            <p className="text-white/70 text-sm">Enter your email to receive a reset code</p>
+          </>
+        )}
+        {step === "otp" && (
+          <>
+            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mb-4">
+              <Mail className="w-7 h-7 text-white" />
+            </div>
+            <h1 className="text-white text-2xl font-bold mb-1">Check your email</h1>
+            <p className="text-white/70 text-sm">Code sent to <span className="text-white font-medium">{email}</span></p>
+          </>
+        )}
+        {step === "newpin" && (
+          <>
+            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mb-4">
+              <Shield className="w-7 h-7 text-white" />
+            </div>
+            <h1 className="text-white text-2xl font-bold mb-1">Create new PIN</h1>
+            <p className="text-white/70 text-sm">Choose a secure 6-digit PIN</p>
+          </>
+        )}
+      </AuthHeader>
+
+      <div className="flex-1 px-6 -mt-6">
+        <div className="max-w-md mx-auto bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl p-6 sm:p-8">
+
+          {step === "email" && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">
+                  Email Address
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && sendOTP()}
+                    placeholder="you@example.com"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-2xl pl-12 pr-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm"
+                  />
+                </div>
+              </div>
+
+              <button
+                onClick={sendOTP}
+                disabled={loading || !email.trim()}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm"
+              >
+                {loading ? <><Loader2 className="w-5 h-5 animate-spin" /> Sending…</> : "Send Reset Code →"}
+              </button>
+
+              <button
+                onClick={() => navigate("/login")}
+                className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
+              >
+                <ArrowLeft className="w-4 h-4" /> Back to login
+              </button>
+            </div>
+          )}
+
+          {step === "otp" && (
+            <div className="space-y-5">
+              <p className="text-slate-400 text-sm text-center">
+                Enter the 6-digit reset code
+              </p>
+              <OTPInput value={otp} onChange={setOtp} disabled={verifying} />
+              {verifying && (
+                <div className="flex items-center justify-center gap-2 text-indigo-400 text-sm">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Verifying…
+                </div>
+              )}
+              <div className="text-center">
+                {resendTimer > 0 ? (
+                  <p className="text-slate-500 text-sm">
+                    Resend in <span className="text-white font-medium">{resendTimer}s</span>
+                  </p>
+                ) : (
+                  <button
+                    onClick={() => { setOtp(""); sendOTP(); }}
+                    className="text-indigo-400 hover:text-indigo-300 text-sm font-medium transition"
+                  >
+                    Resend code
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={() => { setStep("email"); setOtp(""); }}
+                className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
+              >
+                <ArrowLeft className="w-4 h-4" /> Go back
+              </button>
+            </div>
+          )}
+
+          {step === "newpin" && (
+            <div className="space-y-5">
+              <div>
+                <p className="text-slate-400 text-sm text-center mb-4">Create your new 6-digit PIN</p>
+                <PINInput value={pin} onChange={(v) => { setPin(v); setPinError(""); }} masked={!showPin} />
+              </div>
+              <div>
+                <p className="text-slate-400 text-sm text-center mb-4">Confirm your new PIN</p>
+                <PINInput value={confirmPin} onChange={(v) => { setConfirmPin(v); setPinError(""); }} masked={!showPin} />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowPin(!showPin)}
+                className="w-full flex items-center justify-center gap-1 text-slate-500 hover:text-slate-300 text-xs transition"
+              >
+                {showPin ? <><EyeOff className="w-3 h-3" /> Hide PIN</> : <><Eye className="w-3 h-3" /> Show PIN</>}
+              </button>
+
+              {pinError && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-center">
+                  <p className="text-red-400 text-xs">{pinError}</p>
+                </div>
+              )}
+
+              <div className="bg-slate-800 rounded-xl p-3 space-y-1">
+                <p className="text-slate-400 text-xs font-medium">PIN requirements:</p>
+                <p className={cn("text-xs", pin.length === 6 ? "text-emerald-400" : "text-slate-500")}>✓ Exactly 6 digits</p>
+                <p className={cn("text-xs", pin && !/^(\d)\1{5}$/.test(pin) ? "text-emerald-400" : "text-slate-500")}>✓ No repeated digits</p>
+                <p className={cn("text-xs", pin === confirmPin && pin.length === 6 ? "text-emerald-400" : "text-slate-500")}>✓ PINs match</p>
+              </div>
+
+              <button
+                onClick={resetPIN}
+                disabled={loading || pin.length !== 6 || confirmPin.length !== 6}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm"
+              >
+                {loading ? <><Loader2 className="w-5 h-5 animate-spin" /> Saving…</> : "Save New PIN →"}
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="max-w-md mx-auto mt-5 flex items-center justify-center gap-2 text-slate-600 text-xs">
+          <Shield className="w-3.5 h-3.5" /> 256-bit SSL encrypted · Your data is safe
+        </div>
+      </div>
+      <AuthFooter />
+    </div>
+  );
+}
 // ─── Verify OTP Page ──────────────────────────────────────────
 export function VerifyOTPPage() {
   const navigate = useNavigate();

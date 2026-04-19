@@ -86,14 +86,13 @@ function OverviewTab() {
         supabase.from("jobs").select("id, status", { count: "exact" }),
         supabase.from("kyc_verifications").select("id, status", { count: "exact" }),
         supabase.from("disputes").select("id, status", { count: "exact" }),
-        supabase.from("transactions").select("amount, status"),
+        supabase.from("transactions").select("amount, status, type"),
       ]);
 
       const totalRevenue = (transactions.data || [])
-        .filter((t) => t.status === "success" || t.status === "released")
+        .filter((t) => t.type === "release")
         .reduce((sum, t) => sum + (t.amount || 0), 0);
 
-      // Calculate platform commission (5% of revenue)
       const totalCommission = Math.floor(totalRevenue * 0.05);
 
       return {

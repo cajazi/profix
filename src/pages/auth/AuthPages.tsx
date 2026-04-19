@@ -1,139 +1,270 @@
-import { useState, useEffect } from "react";
-import { Link, useNavigate, useLocation } from "react-router-dom";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
+import { useState, useRef, useEffect } from "react";
+import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { useAuthStore } from "../../store/auth.store";
+import { Loader2, Mail, ArrowLeft, Shield, Eye, EyeOff, CheckCircle } from "lucide-react";
 import toast from "react-hot-toast";
-import { Mail, Phone, ArrowRight, Loader2 } from "lucide-react";
+import { cn } from "../../lib/utils";
 
-// ─── Login Page ───────────────────────────────────────────────
-const loginSchema = z.object({
-  identifier: z.string().min(3, "Enter a valid email or phone number"),
-});
-type LoginForm = z.infer<typeof loginSchema>;
+// ─── OTP Input Component ──────────────────────────────────────
+function OTPInput({ length = 6, value, onChange, disabled }: {
+  length?: number;
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+}) {
+  const inputs = useRef<(HTMLInputElement | null)[]>([]);
 
-export function LoginPage() {
-  const navigate = useNavigate();
-  const [isLoading, setIsLoading] = useState(false);
-  const [method, setMethod] = useState<"email" | "phone">("email");
+  const handleChange = (i: number, v: string) => {
+    if (!/^\d*$/.test(v)) return;
+    const digits = value.split("");
+    digits[i] = v.slice(-1);
+    const next = digits.join("");
+    onChange(next);
+    if (v && i < length - 1) inputs.current[i + 1]?.focus();
+  };
 
-  const { register, handleSubmit, formState: { errors } } = useForm<LoginForm>({
-    resolver: zodResolver(loginSchema),
-  });
-
-  const onSubmit = async (data: LoginForm) => {
-    setIsLoading(true);
-    try {
-      let result;
-      if (method === "email") {
-        result = await supabase.auth.signInWithOtp({
-          email: data.identifier,
-          options: { shouldCreateUser: false },
-        });
-      } else {
-        const phone = data.identifier.startsWith("+")
-          ? data.identifier
-          : `+234${data.identifier.replace(/^0/, "")}`;
-        result = await supabase.auth.signInWithOtp({
-          phone,
-          options: { shouldCreateUser: false },
-        });
-      }
-
-      if (result.error) {
-        toast.error(result.error.message);
-        return;
-      }
-
-      toast.success(`OTP sent to your ${method}!`);
-      navigate("/verify-otp", {
-        state: { identifier: data.identifier, method, flow: "login" },
-      });
-    } catch {
-      toast.error("An unexpected error occurred");
-    } finally {
-      setIsLoading(false);
+  const handleKeyDown = (i: number, e: React.KeyboardEvent) => {
+    if (e.key === "Backspace" && !value[i] && i > 0) {
+      inputs.current[i - 1]?.focus();
     }
   };
 
+  const handlePaste = (e: React.ClipboardEvent) => {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, length);
+    onChange(pasted);
+    const nextIndex = Math.min(pasted.length, length - 1);
+    inputs.current[nextIndex]?.focus();
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 mb-4">
-            <div className="w-10 h-10 bg-indigo-500 rounded-xl flex items-center justify-center">
+    <div className="flex gap-3 justify-center">
+      {Array.from({ length }).map((_, i) => (
+        <input
+          key={i}
+          ref={(el) => { inputs.current[i] = el; }}
+          type="text"
+          inputMode="numeric"
+          maxLength={1}
+          value={value[i] || ""}
+          onChange={(e) => handleChange(i, e.target.value)}
+          onKeyDown={(e) => handleKeyDown(i, e)}
+          onPaste={handlePaste}
+          disabled={disabled}
+          className={cn(
+            "w-12 h-14 text-center text-xl font-bold rounded-2xl border-2 transition-all",
+            "bg-slate-800 text-white focus:outline-none",
+            value[i]
+              ? "border-emerald-500 bg-emerald-500/10 text-emerald-400"
+              : "border-slate-700 focus:border-indigo-500",
+            disabled && "opacity-50 cursor-not-allowed"
+          )}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ─── Login Page ───────────────────────────────────────────────
+export function LoginPage() {
+  const navigate = useNavigate();
+  const { isAuthenticated } = useAuthStore();
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [otp, setOtp] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [resendTimer, setResendTimer] = useState(0);
+
+  useEffect(() => {
+    if (isAuthenticated) navigate("/dashboard");
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (resendTimer > 0) {
+      const t = setTimeout(() => setResendTimer(resendTimer - 1), 1000);
+      return () => clearTimeout(t);
+    }
+  }, [resendTimer]);
+
+  const sendOTP = async () => {
+    if (!email.trim()) return toast.error("Enter your email address");
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithOtp({ email: email.trim() });
+      if (error) throw error;
+      setSent(true);
+      setResendTimer(60);
+      toast.success("Code sent to your email!");
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verifyOTP = async () => {
+    if (otp.length !== 6) return toast.error("Enter the 6-digit code");
+    setVerifying(true);
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        email: email.trim(),
+        token: otp,
+        type: "magiclink",
+      });
+      if (error) throw error;
+      toast.success("Welcome back!");
+      navigate("/dashboard");
+    } catch (err) {
+      toast.error("Invalid or expired code. Try again.");
+      setOtp("");
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  useEffect(() => {
+    if (otp.length === 6) verifyOTP();
+  }, [otp]);
+
+  return (
+    <div className="min-h-screen bg-slate-950 flex flex-col">
+      {/* Header */}
+      <div className="bg-gradient-to-br from-indigo-600 via-indigo-700 to-violet-800 px-6 pt-16 pb-12">
+        <div className="max-w-md mx-auto">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 bg-white/20 backdrop-blur rounded-2xl flex items-center justify-center">
               <span className="text-white font-black text-lg">P</span>
             </div>
-            <span className="text-white font-bold text-2xl tracking-tight">ProFix</span>
+            <span className="text-white font-bold text-xl tracking-tight">ProFix</span>
           </div>
-          <h1 className="text-white text-3xl font-bold mb-2">Welcome back</h1>
-          <p className="text-slate-400">Sign in with a one-time passcode</p>
+          {sent ? (
+            <>
+              <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mb-4">
+                <Mail className="w-7 h-7 text-white" />
+              </div>
+              <h1 className="text-white text-2xl font-bold mb-1">Check your email</h1>
+              <p className="text-white/70 text-sm">
+                We sent a 6-digit code to{" "}
+                <span className="text-white font-medium">{email}</span>
+              </p>
+            </>
+          ) : (
+            <>
+              <h1 className="text-white text-3xl font-bold mb-2">Welcome back</h1>
+              <p className="text-white/70">Sign in with your email address</p>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Card */}
+      <div className="flex-1 px-6 -mt-6">
+        <div className="max-w-md mx-auto bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl p-6 sm:p-8">
+          {!sent ? (
+            <div className="space-y-5">
+              <div>
+                <label className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">
+                  Email Address
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && sendOTP()}
+                    placeholder="you@example.com"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-2xl pl-12 pr-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition text-sm"
+                    autoComplete="email"
+                  />
+                </div>
+              </div>
+
+              <button
+                onClick={sendOTP}
+                disabled={loading || !email.trim()}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm"
+              >
+                {loading ? (
+                  <><Loader2 className="w-5 h-5 animate-spin" /> Sending code…</>
+                ) : (
+                  "Send verification code →"
+                )}
+              </button>
+
+              <div className="flex items-center gap-3 py-2">
+                <div className="flex-1 h-px bg-slate-800" />
+                <span className="text-slate-600 text-xs">New to ProFix?</span>
+                <div className="flex-1 h-px bg-slate-800" />
+              </div>
+
+              <Link
+                to="/register"
+                className="block w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold py-4 rounded-2xl transition text-center text-sm"
+              >
+                Create an account
+              </Link>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div>
+                <p className="text-slate-400 text-sm text-center mb-6">
+                  Enter the 6-digit code sent to your email
+                </p>
+                <OTPInput
+                  value={otp}
+                  onChange={setOtp}
+                  disabled={verifying}
+                />
+              </div>
+
+              {verifying && (
+                <div className="flex items-center justify-center gap-2 text-indigo-400 text-sm">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Verifying…
+                </div>
+              )}
+
+              <div className="text-center">
+                {resendTimer > 0 ? (
+                  <p className="text-slate-500 text-sm">
+                    Resend code in <span className="text-white font-medium">{resendTimer}s</span>
+                  </p>
+                ) : (
+                  <button
+                    onClick={() => { setOtp(""); sendOTP(); }}
+                    className="text-indigo-400 hover:text-indigo-300 text-sm font-medium transition"
+                  >
+                    Resend code
+                  </button>
+                )}
+              </div>
+
+              <button
+                onClick={() => { setSent(false); setOtp(""); }}
+                className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
+              >
+                <ArrowLeft className="w-4 h-4" /> Use different email
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="bg-slate-900/80 backdrop-blur border border-slate-800 rounded-2xl p-8">
-          <div className="flex bg-slate-800 rounded-xl p-1 mb-6">
-            <button
-              onClick={() => setMethod("email")}
-              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${
-                method === "email"
-                  ? "bg-indigo-600 text-white shadow"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <Mail className="w-4 h-4" /> Email OTP
-            </button>
-            <button
-              onClick={() => setMethod("phone")}
-              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${
-                method === "phone"
-                  ? "bg-indigo-600 text-white shadow"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              <Phone className="w-4 h-4" /> Phone OTP
-            </button>
-          </div>
+        {/* Security badge */}
+        <div className="max-w-md mx-auto mt-6 flex items-center justify-center gap-2 text-slate-600 text-xs">
+          <Shield className="w-3.5 h-3.5" />
+          256-bit SSL encrypted · Your data is safe
+        </div>
+      </div>
 
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            <div>
-              <label className="block text-slate-300 text-sm font-medium mb-2">
-                {method === "email" ? "Email address" : "Phone number"}
-              </label>
-              <input
-                {...register("identifier")}
-                type={method === "email" ? "email" : "tel"}
-                placeholder={
-                  method === "email" ? "you@example.com" : "+234 800 000 0000"
-                }
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
-              />
-              {errors.identifier && (
-                <p className="text-red-400 text-xs mt-1">
-                  {errors.identifier.message}
-                </p>
-              )}
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold py-3 rounded-xl transition flex items-center justify-center gap-2"
-            >
-              {isLoading ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <>Send OTP <ArrowRight className="w-5 h-5" /></>
-              )}
-            </button>
-          </form>
-
-          <p className="text-center text-slate-400 text-sm mt-6">
-            Don't have an account?{" "}
-            <Link to="/register" className="text-indigo-400 hover:text-indigo-300 font-medium">
-              Create one
-            </Link>
-          </p>
+      {/* Footer */}
+      <div className="px-6 py-6 text-center">
+        <div className="flex items-center justify-center gap-4 text-xs text-slate-600">
+          <Link to="/privacy" className="hover:text-slate-400 transition">Privacy Policy</Link>
+          <span>·</span>
+          <Link to="/terms" className="hover:text-slate-400 transition">Terms of Service</Link>
         </div>
       </div>
     </div>
@@ -141,280 +272,341 @@ export function LoginPage() {
 }
 
 // ─── Register Page ────────────────────────────────────────────
-const registerSchema = z.object({
-  full_name: z.string().min(2, "Full name required"),
-  email: z.string().email("Valid email required"),
-  role: z.enum(["owner", "worker"]),
-});
-type RegisterForm = z.infer<typeof registerSchema>;
-
 export function RegisterPage() {
   const navigate = useNavigate();
-  const [isLoading, setIsLoading] = useState(false);
+  const { isAuthenticated } = useAuthStore();
+  const [step, setStep] = useState<"details" | "verify">(  "details");
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"owner" | "worker" | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [otp, setOtp] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [resendTimer, setResendTimer] = useState(0);
 
-  const { register, handleSubmit, formState: { errors } } = useForm<RegisterForm>({
-    resolver: zodResolver(registerSchema),
-  });
+  useEffect(() => {
+    if (isAuthenticated) navigate("/dashboard");
+  }, [isAuthenticated]);
 
-  const onSubmit = async (data: RegisterForm) => {
-    setIsLoading(true);
+  useEffect(() => {
+    if (resendTimer > 0) {
+      const t = setTimeout(() => setResendTimer(resendTimer - 1), 1000);
+      return () => clearTimeout(t);
+    }
+  }, [resendTimer]);
+
+  const sendOTP = async () => {
+    if (!fullName.trim()) return toast.error("Enter your full name");
+    if (!email.trim()) return toast.error("Enter your email address");
+    if (!role) return toast.error("Select your account type");
+
+    setLoading(true);
     try {
       const { error } = await supabase.auth.signInWithOtp({
-        email: data.email,
+        email: email.trim(),
         options: {
-          data: { full_name: data.full_name, role: data.role },
-          shouldCreateUser: true,
+          data: { full_name: fullName.trim(), role },
         },
       });
-
-      if (error) {
-        toast.error(error.message);
-        return;
-      }
-
-      toast.success("OTP sent! Check your email.");
-      navigate("/verify-otp", {
-        state: {
-          identifier: data.email,
-          method: "email",
-          flow: "register",
-        },
-      });
-    } catch {
-      toast.error("Registration failed. Please try again.");
+      if (error) throw error;
+      setStep("verify");
+      setResendTimer(60);
+      toast.success("Verification code sent!");
+    } catch (err) {
+      toast.error((err as Error).message);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
+  const verifyOTP = async () => {
+    if (otp.length !== 6) return toast.error("Enter the 6-digit code");
+    setVerifying(true);
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        email: email.trim(),
+        token: otp,
+        type: "signup",
+      });
+      if (error) throw error;
+      toast.success("Account created! Welcome to ProFix 🎉");
+      navigate("/dashboard");
+    } catch (err) {
+      toast.error("Invalid or expired code. Try again.");
+      setOtp("");
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  useEffect(() => {
+    if (otp.length === 6) verifyOTP();
+  }, [otp]);
+
+  const roles = [
+    {
+      value: "owner" as const,
+      label: "Hire Workers",
+      desc: "Post jobs & manage projects",
+      icon: "🏠",
+      color: "border-indigo-500 bg-indigo-500/10",
+      inactive: "border-slate-700 hover:border-slate-600",
+    },
+    {
+      value: "worker" as const,
+      label: "Find Work",
+      desc: "Apply for jobs & earn money",
+      icon: "🔧",
+      color: "border-emerald-500 bg-emerald-500/10",
+      inactive: "border-slate-700 hover:border-slate-600",
+    },
+  ];
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 mb-4">
-            <div className="w-10 h-10 bg-indigo-500 rounded-xl flex items-center justify-center">
+    <div className="min-h-screen bg-slate-950 flex flex-col">
+      {/* Header */}
+      <div className="bg-gradient-to-br from-indigo-600 via-indigo-700 to-violet-800 px-6 pt-16 pb-12">
+        <div className="max-w-md mx-auto">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-10 h-10 bg-white/20 backdrop-blur rounded-2xl flex items-center justify-center">
               <span className="text-white font-black text-lg">P</span>
             </div>
-            <span className="text-white font-bold text-2xl tracking-tight">ProFix</span>
+            <span className="text-white font-bold text-xl tracking-tight">ProFix</span>
           </div>
-          <h1 className="text-white text-3xl font-bold mb-2">Create account</h1>
-          <p className="text-slate-400">Join thousands of professionals</p>
+          {step === "details" ? (
+            <>
+              <h1 className="text-white text-3xl font-bold mb-2">Create account</h1>
+              <p className="text-white/70">Join thousands of professionals</p>
+            </>
+          ) : (
+            <>
+              <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mb-4">
+                <Mail className="w-7 h-7 text-white" />
+              </div>
+              <h1 className="text-white text-2xl font-bold mb-1">Verify your email</h1>
+              <p className="text-white/70 text-sm">
+                Code sent to <span className="text-white font-medium">{email}</span>
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Card */}
+      <div className="flex-1 px-6 -mt-6">
+        <div className="max-w-md mx-auto bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl p-6 sm:p-8">
+          {step === "details" ? (
+            <div className="space-y-5">
+              {/* Full name */}
+              <div>
+                <label className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">
+                  Full Name
+                </label>
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Ifeanyichukwu Cosmas"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm"
+                />
+              </div>
+
+              {/* Email */}
+              <div>
+                <label className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">
+                  Email Address
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-2xl pl-12 pr-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm"
+                    autoComplete="email"
+                  />
+                </div>
+              </div>
+
+              {/* Role selection */}
+              <div>
+                <label className="block text-slate-400 text-xs font-medium mb-3 uppercase tracking-wider">
+                  I want to…
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  {roles.map(({ value, label, desc, icon, color, inactive }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setRole(value)}
+                      className={cn(
+                        "flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all text-center",
+                        role === value ? color : inactive
+                      )}
+                    >
+                      <span className="text-2xl">{icon}</span>
+                      <div>
+                        <p className={cn(
+                          "font-semibold text-sm",
+                          role === value ? "text-white" : "text-slate-300"
+                        )}>
+                          {label}
+                        </p>
+                        <p className="text-slate-500 text-xs mt-0.5">{desc}</p>
+                      </div>
+                      {role === value && (
+                        <CheckCircle className="w-4 h-4 text-emerald-400" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                onClick={sendOTP}
+                disabled={loading || !fullName.trim() || !email.trim() || !role}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm"
+              >
+                {loading ? (
+                  <><Loader2 className="w-5 h-5 animate-spin" /> Creating account…</>
+                ) : (
+                  "Create account →"
+                )}
+              </button>
+
+              <div className="flex items-center gap-3 py-2">
+                <div className="flex-1 h-px bg-slate-800" />
+                <span className="text-slate-600 text-xs">Already have an account?</span>
+                <div className="flex-1 h-px bg-slate-800" />
+              </div>
+
+              <Link
+                to="/login"
+                className="block w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold py-4 rounded-2xl transition text-center text-sm"
+              >
+                Sign in instead
+              </Link>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div>
+                <p className="text-slate-400 text-sm text-center mb-6">
+                  Enter the 6-digit code to verify your email
+                </p>
+                <OTPInput
+                  value={otp}
+                  onChange={setOtp}
+                  disabled={verifying}
+                />
+              </div>
+
+              {verifying && (
+                <div className="flex items-center justify-center gap-2 text-indigo-400 text-sm">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Creating your account…
+                </div>
+              )}
+
+              <div className="text-center">
+                {resendTimer > 0 ? (
+                  <p className="text-slate-500 text-sm">
+                    Resend in <span className="text-white font-medium">{resendTimer}s</span>
+                  </p>
+                ) : (
+                  <button
+                    onClick={() => { setOtp(""); sendOTP(); }}
+                    className="text-indigo-400 hover:text-indigo-300 text-sm font-medium transition"
+                  >
+                    Resend code
+                  </button>
+                )}
+              </div>
+
+              <button
+                onClick={() => { setStep("details"); setOtp(""); }}
+                className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
+              >
+                <ArrowLeft className="w-4 h-4" /> Go back
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="bg-slate-900/80 backdrop-blur border border-slate-800 rounded-2xl p-8">
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-            <div>
-              <label className="block text-slate-300 text-sm font-medium mb-2">
-                Full name
-              </label>
-              <input
-                {...register("full_name")}
-                placeholder="John Adeyemi"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
-              />
-              {errors.full_name && (
-                <p className="text-red-400 text-xs mt-1">{errors.full_name.message}</p>
-              )}
-            </div>
+        {/* Security badge */}
+        <div className="max-w-md mx-auto mt-6 flex items-center justify-center gap-2 text-slate-600 text-xs">
+          <Shield className="w-3.5 h-3.5" />
+          256-bit SSL encrypted · Your data is safe
+        </div>
+      </div>
 
-            <div>
-              <label className="block text-slate-300 text-sm font-medium mb-2">
-                Email address
-              </label>
-              <input
-                {...register("email")}
-                type="email"
-                placeholder="you@example.com"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
-              />
-              {errors.email && (
-                <p className="text-red-400 text-xs mt-1">{errors.email.message}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-slate-300 text-sm font-medium mb-3">
-                I want to…
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                {(["owner", "worker"] as const).map((r) => (
-                  <label
-                    key={r}
-                    className="flex flex-col items-center gap-2 p-4 rounded-xl border border-slate-700 cursor-pointer hover:border-indigo-500 transition has-[:checked]:border-indigo-500 has-[:checked]:bg-indigo-500/10"
-                  >
-                    <input
-                      type="radio"
-                      {...register("role")}
-                      value={r}
-                      className="sr-only"
-                    />
-                    <span className="text-2xl">
-                      {r === "owner" ? "🏠" : "🔧"}
-                    </span>
-                    <span className="text-white font-medium text-sm capitalize">
-                      {r === "owner" ? "Hire workers" : "Find work"}
-                    </span>
-                    <span className="text-slate-400 text-xs text-center">
-                      {r === "owner"
-                        ? "Post jobs & manage projects"
-                        : "Apply & earn money"}
-                    </span>
-                  </label>
-                ))}
-              </div>
-              {errors.role && (
-                <p className="text-red-400 text-xs mt-1">{errors.role.message}</p>
-              )}
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold py-3 rounded-xl transition flex items-center justify-center gap-2"
-            >
-              {isLoading ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <>Create account <ArrowRight className="w-4 h-4" /></>
-              )}
-            </button>
-          </form>
-
-          <p className="text-center text-slate-400 text-sm mt-6">
-            Already have an account?{" "}
-            <Link to="/login" className="text-indigo-400 hover:text-indigo-300 font-medium">
-              Sign in
-            </Link>
-          </p>
+      {/* Footer */}
+      <div className="px-6 py-6 text-center">
+        <p className="text-slate-600 text-xs mb-2">
+          By creating an account you agree to our
+        </p>
+        <div className="flex items-center justify-center gap-4 text-xs text-slate-600">
+          <Link to="/privacy" className="hover:text-slate-400 transition">Privacy Policy</Link>
+          <span>·</span>
+          <Link to="/terms" className="hover:text-slate-400 transition">Terms of Service</Link>
         </div>
       </div>
     </div>
   );
 }
 
-// ─── Verify OTP Page ──────────────────────────────────────────
+// ─── Verify OTP Page (standalone) ────────────────────────────
 export function VerifyOTPPage() {
   const navigate = useNavigate();
-  const location = useLocation();
-  const { identifier, method, flow } = location.state || {};
   const [otp, setOtp] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [resendCooldown, setResendCooldown] = useState(0);
-
-  useEffect(() => {
-    if (!identifier) navigate("/login");
-  }, [identifier, navigate]);
-
-  useEffect(() => {
-    if (resendCooldown > 0) {
-      const t = setTimeout(() => setResendCooldown((c) => c - 1), 1000);
-      return () => clearTimeout(t);
-    }
-  }, [resendCooldown]);
+  const [verifying, setVerifying] = useState(false);
+  const email = new URLSearchParams(window.location.search).get("email") || "";
 
   const verify = async () => {
-    if (otp.length < 6) {
-      toast.error("Enter the 6-digit OTP");
-      return;
-    }
-    setIsLoading(true);
+    if (otp.length !== 6) return;
+    setVerifying(true);
     try {
-      let result;
-      if (method === "email") {
-        result = await supabase.auth.verifyOtp({
-        email: identifier,
+      const { error } = await supabase.auth.verifyOtp({
+        email,
         token: otp,
         type: "magiclink",
       });
-      } else {
-        result = await supabase.auth.verifyOtp({
-          phone: identifier,
-          token: otp,
-          type: "sms",
-        });
-      }
-
-      if (result.error) {
-        toast.error(result.error.message);
-        return;
-      }
-      toast.success("Verified! Welcome to ProFix 🎉");
+      if (error) throw error;
       navigate("/dashboard");
     } catch {
-      toast.error("Verification failed");
+      toast.error("Invalid code. Please try again.");
+      setOtp("");
     } finally {
-      setIsLoading(false);
+      setVerifying(false);
     }
   };
 
-  const resend = async () => {
-    if (resendCooldown > 0) return;
-    if (method === "email") {
-      await supabase.auth.resend({
-        type: "signup",
-        email: identifier,
-      });
-    } else {
-      await supabase.auth.resend({ type: "sms", phone: identifier });
-    }
-    toast.success("OTP resent!");
-    setResendCooldown(60);
-  };
+  useEffect(() => {
+    if (otp.length === 6) verify();
+  }, [otp]);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 flex items-center justify-center p-4">
-      <div className="w-full max-w-md text-center">
-        <div className="inline-flex items-center gap-2 mb-8">
-          <div className="w-10 h-10 bg-indigo-500 rounded-xl flex items-center justify-center">
-            <span className="text-white font-black text-lg">P</span>
-          </div>
-          <span className="text-white font-bold text-2xl tracking-tight">ProFix</span>
-        </div>
-
-        <div className="bg-slate-900/80 backdrop-blur border border-slate-800 rounded-2xl p-8">
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center px-6">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-8">
           <div className="w-16 h-16 bg-indigo-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <span className="text-3xl">{method === "email" ? "📧" : "📱"}</span>
+            <Mail className="w-8 h-8 text-indigo-400" />
           </div>
-          <h2 className="text-white text-2xl font-bold mb-2">
-            Check your {method}
-          </h2>
-          <p className="text-slate-400 text-sm mb-6">
-            We sent a 6-digit code to{" "}
-            <strong className="text-white">{identifier}</strong>
-          </p>
-
-          <input
-            value={otp}
-            onChange={(e) =>
-              setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))
-            }
-            placeholder="000000"
-            maxLength={6}
-            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-4 text-white text-center text-2xl tracking-[1rem] font-mono placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition mb-4"
-          />
-
-          <button
-            onClick={verify}
-            disabled={isLoading || otp.length < 6}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold py-3 rounded-xl transition flex items-center justify-center gap-2"
-          >
-            {isLoading ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              "Verify OTP"
-            )}
-          </button>
-
-          <button
-            onClick={resend}
-            disabled={resendCooldown > 0}
-            className="mt-4 text-slate-400 hover:text-indigo-400 text-sm transition disabled:opacity-50"
-          >
-            {resendCooldown > 0
-              ? `Resend in ${resendCooldown}s`
-              : "Resend code"}
-          </button>
+          <h1 className="text-white text-2xl font-bold">Check your email</h1>
+          <p className="text-slate-400 text-sm mt-2">Enter the 6-digit code we sent you</p>
         </div>
+        <OTPInput value={otp} onChange={setOtp} disabled={verifying} />
+        {verifying && (
+          <div className="flex justify-center mt-4">
+            <Loader2 className="w-5 h-5 text-indigo-400 animate-spin" />
+          </div>
+        )}
+        <button
+          onClick={() => navigate("/login")}
+          className="mt-8 w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
+        >
+          <ArrowLeft className="w-4 h-4" /> Back to login
+        </button>
       </div>
     </div>
   );

@@ -90,8 +90,11 @@ function OverviewTab() {
       ]);
 
       const totalRevenue = (transactions.data || [])
-        .filter((t) => t.status === "released")
+        .filter((t) => t.status === "success" || t.status === "released")
         .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+      // Calculate platform commission (5% of revenue)
+      const totalCommission = Math.floor(totalRevenue * 0.05);
 
       return {
         totalUsers: users.count || 0,
@@ -100,6 +103,7 @@ function OverviewTab() {
         pendingKYC: (kyc.data || []).filter((k) => k.status === "pending").length,
         openDisputes: (disputes.data || []).filter((d) => d.status === "open").length,
         totalRevenue,
+        totalCommission,
       };
     },
   });
@@ -121,6 +125,7 @@ function OverviewTab() {
         { label: "Pending KYC", value: stats?.pendingKYC || 0, icon: ShieldCheck, color: "text-amber-400", bg: "bg-amber-400/10" },
         { label: "Open Disputes", value: stats?.openDisputes || 0, icon: AlertTriangle, color: "text-red-400", bg: "bg-red-400/10" },
         { label: "Total Revenue", value: `₦${(stats?.totalRevenue || 0).toLocaleString()}`, icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-400/10" },
+{ label: "Platform Commission", value: `₦${(stats?.totalCommission || 0).toLocaleString()}`, icon: DollarSign, color: "text-indigo-400", bg: "bg-indigo-400/10" },
       ].map(({ label, value, icon: Icon, color, bg }) => (
         <div key={label} className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
           <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center mb-3", bg)}>

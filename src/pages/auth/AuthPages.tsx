@@ -881,12 +881,19 @@ export function ForgotPINPage() {
     if (!email.trim()) return toast.error("Enter your email address");
     setLoading(true);
     try {
-      await supabase.auth.signInWithOtp({ email: email.trim() });
+      const { error } = await supabase.auth.signInWithOtp({ 
+        email: email.trim(),
+        options: { shouldCreateUser: false }
+      });
+      if (error) throw error;
       setStep("otp");
       setResendTimer(60);
       toast.success("Reset code sent to your email!");
     } catch (err) {
-      toast.error((err as Error).message);
+      // Always show success to prevent enumeration
+      setStep("otp");
+      setResendTimer(60);
+      toast.success("If this email is registered, a code has been sent.");
     } finally {
       setLoading(false);
     }

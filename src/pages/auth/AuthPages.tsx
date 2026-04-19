@@ -329,43 +329,64 @@ export function LoginPage() {
     setVerifying(true);
     try {
       const pinHash = await hashPIN(pin);
-      const { data: result } = await supabase.rpc("verify_user_pin", {
-        p_identifier: identifier.trim(),
-        p_pin_hash: pinHash,
-      });
+      const fingerprint = getDeviceFingerprint();
 
-      const user = result?.[0];
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/pin-login`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            identifier: identifier.trim(),
+            pin_hash: pinHash,
+            device_fingerprint: fingerprint,
+          }),
+        }
+      );
 
-      if (!user || !user.is_valid) {
+      const data = await res.json();
+
+      if (!res.ok) {
         const n = attempts + 1;
         setAttempts(n);
-        await logAuthAttempt(identifier.trim(), "pin_login", false, "Wrong PIN");
+        await logAuthAttempt(identifier.trim(), "pin_login", false, data.error);
         setPin("");
         handleLockout(n);
         return;
       }
 
-      // Check if device is trusted
-      const { data: isTrusted } = await supabase.rpc("check_trusted_device", {
-        p_identifier: identifier.trim(),
-        p_fingerprint: getDeviceFingerprint(),
-      });
+      await logAuthAttempt(identifier.trim(), "pin_login", true);
 
-      if (isTrusted) {
-        // Known device — sign in with OTP silently
-        await supabase.auth.signInWithOtp({ email: userEmail });
-        setStep("otp");
-        setResendTimer(60);
-        toast.success("PIN correct! Check your email for the login code.");
+      if (data.trusted && data.token) {
+        // Trusted device — verify token directly, no OTP needed
+        const { error } = await supabase.auth.verifyOtp({
+          email: data.email,
+          token: data.token,
+          type: "magiclink",
+        });
+
+        if (error) {
+          // Fallback to OTP if token verification fails
+          await supabase.auth.signInWithOtp({ email: data.email });
+          setUserEmail(data.email);
+          setStep("otp");
+          setResendTimer(60);
+          toast.success("Check your email for the login code.");
+        } else {
+          await trustDevice((await supabase.auth.getUser()).data.user!.id);
+          toast.success("Welcome back! 👋");
+          navigate("/dashboard");
+        }
       } else {
-        // New device — require OTP verification
-        await supabase.auth.signInWithOtp({ email: userEmail });
+        // New device — require OTP
+        setUserEmail(data.email);
+        await supabase.auth.signInWithOtp({ email: data.email });
         setStep("otp");
         setResendTimer(60);
         toast.success("New device detected! Check your email to verify.");
       }
-
-      await logAuthAttempt(identifier.trim(), "pin_login", true);
+    } catch (err) {
+      toast.error("Something went wrong. Please try again.");
     } finally {
       setVerifying(false);
     }

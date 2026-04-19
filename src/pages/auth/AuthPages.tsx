@@ -680,7 +680,7 @@ export function RegisterPage() {
       const { error } = await supabase.auth.verifyOtp({
         email: email.trim(),
         token: otp,
-        type: "signup",
+        type: "email",
       });
       if (error) throw error;
 

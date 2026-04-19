@@ -265,6 +265,17 @@ export function LoginPage() {
 
     setLoading(true);
     try {
+      // Check if email is registered
+      const { data: exists } = await supabase.rpc("check_email_exists", {
+        p_email: email.trim(),
+      });
+      if (!exists) {
+        // Generic message to prevent enumeration but block login
+        await logAuthAttempt(email.trim(), "login", false, "Email not registered");
+        setSent(true);
+        setResendTimer(60);
+        return;
+      }
       const { error } = await supabase.auth.signInWithOtp({ email: email.trim() });
       if (error) throw error;
       await logAuthAttempt(email.trim(), "otp_request", true);

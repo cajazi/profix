@@ -510,13 +510,6 @@ export function LoginPage() {
               >
                 Forgot PIN?
               </Link>
-
-              <Link
-                to="/forgot-pin"
-                className="block w-full text-center text-indigo-400 hover:text-indigo-300 text-sm transition"
-              >
-                Forgot PIN?
-              </Link>
             </div>
           )}
 

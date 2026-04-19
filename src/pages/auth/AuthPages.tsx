@@ -2,16 +2,17 @@ import { useState, useRef, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { useAuthStore } from "../../store/auth.store";
-import { Loader2, Mail, ArrowLeft, Shield, CheckCircle } from "lucide-react";
+import { Loader2, Mail, ArrowLeft, Shield, CheckCircle, Phone, Eye, EyeOff } from "lucide-react";
 import toast from "react-hot-toast";
 import { cn } from "../../lib/utils";
 
-// ─── OTP Input ────────────────────────────────────────────────
-function OTPInput({ length = 6, value, onChange, disabled }: {
+// ─── PIN Input ────────────────────────────────────────────────
+function PINInput({ length = 6, value, onChange, disabled, masked = true }: {
   length?: number;
   value: string;
   onChange: (v: string) => void;
   disabled?: boolean;
+  masked?: boolean;
 }) {
   const inputs = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -37,12 +38,12 @@ function OTPInput({ length = 6, value, onChange, disabled }: {
   };
 
   return (
-    <div className="flex gap-3 justify-center">
+    <div className="flex gap-2 sm:gap-3 justify-center">
       {Array.from({ length }).map((_, i) => (
         <input
           key={i}
           ref={(el) => { inputs.current[i] = el; }}
-          type="text"
+          type={masked ? "password" : "text"}
           inputMode="numeric"
           maxLength={1}
           value={value[i] || ""}
@@ -51,7 +52,7 @@ function OTPInput({ length = 6, value, onChange, disabled }: {
           onPaste={handlePaste}
           disabled={disabled}
           className={cn(
-            "w-12 h-14 text-center text-xl font-bold rounded-2xl border-2 transition-all",
+            "w-11 h-13 sm:w-12 sm:h-14 text-center text-xl font-bold rounded-2xl border-2 transition-all",
             "bg-slate-800 text-white focus:outline-none",
             value[i]
               ? "border-emerald-500 bg-emerald-500/10 text-emerald-400"
@@ -62,6 +63,15 @@ function OTPInput({ length = 6, value, onChange, disabled }: {
       ))}
     </div>
   );
+}
+
+// ─── OTP Input (same as PIN but always visible) ───────────────
+function OTPInput({ value, onChange, disabled }: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+}) {
+  return <PINInput value={value} onChange={onChange} disabled={disabled} masked={false} />;
 }
 
 // ─── Security helpers ─────────────────────────────────────────
@@ -97,15 +107,23 @@ function getDeviceInfo() {
   return { browser, os, device_name: `${browser} on ${os}` };
 }
 
+async function hashPIN(pin: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(pin + "profix_salt_2026");
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function logAuthAttempt(
-  email: string,
-  type: "login" | "otp_request" | "otp_verify",
+  identifier: string,
+  type: "login" | "otp_request" | "otp_verify" | "pin_login",
   success: boolean,
   reason?: string
 ) {
   try {
     await supabase.from("auth_attempts").insert({
-      email,
+      email: identifier,
       device_fingerprint: getDeviceFingerprint(),
       attempt_type: type,
       success,
@@ -114,7 +132,7 @@ async function logAuthAttempt(
   } catch { /* non-blocking */ }
 }
 
-async function checkRateLimit(email: string): Promise<{
+async function checkRateLimit(identifier: string): Promise<{
   blocked: boolean;
   remaining: number;
   retryAfter: number;
@@ -123,7 +141,7 @@ async function checkRateLimit(email: string): Promise<{
   const { data } = await supabase
     .from("auth_attempts")
     .select("success, created_at")
-    .eq("email", email)
+    .eq("email", identifier)
     .gte("created_at", since)
     .order("created_at", { ascending: false });
 
@@ -142,18 +160,28 @@ async function checkRateLimit(email: string): Promise<{
   return { blocked: false, remaining: MAX - failures, retryAfter: 0 };
 }
 
-// ─── Shared lock warning ──────────────────────────────────────
+async function trustDevice(userId: string) {
+  const { browser, os, device_name } = getDeviceInfo();
+  await supabase.from("device_sessions").upsert({
+    user_id: userId,
+    device_fingerprint: getDeviceFingerprint(),
+    device_name,
+    browser,
+    os,
+    last_seen: new Date().toISOString(),
+  }, { onConflict: "user_id,device_fingerprint" });
+}
+
+// ─── Shared Components ────────────────────────────────────────
 function LockWarning({ locked, lockTimer, attempts }: {
-  locked: boolean;
-  lockTimer: number;
-  attempts: number;
+  locked: boolean; lockTimer: number; attempts: number;
 }) {
   if (locked) {
     return (
       <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-4 text-center">
         <p className="text-red-400 font-semibold text-sm">🔒 Account Temporarily Locked</p>
         <p className="text-red-300 text-xs mt-1">
-          Too many failed attempts. Try again in{" "}
+          Try again in{" "}
           <span className="font-bold text-red-200">
             {Math.floor(lockTimer / 60)}:{String(lockTimer % 60).padStart(2, "0")}
           </span>
@@ -165,7 +193,7 @@ function LockWarning({ locked, lockTimer, attempts }: {
     return (
       <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3 text-center">
         <p className="text-amber-400 text-xs">
-          ⚠️ {5 - attempts} attempt{5 - attempts !== 1 ? "s" : ""} remaining before lockout
+          ⚠️ {5 - attempts} attempt{5 - attempts !== 1 ? "s" : ""} remaining
         </p>
       </div>
     );
@@ -173,7 +201,6 @@ function LockWarning({ locked, lockTimer, attempts }: {
   return null;
 }
 
-// ─── Gradient Header ──────────────────────────────────────────
 function AuthHeader({ children }: { children: React.ReactNode }) {
   return (
     <div className="bg-gradient-to-br from-indigo-600 via-indigo-700 to-violet-800 px-6 pt-14 pb-12">
@@ -190,7 +217,6 @@ function AuthHeader({ children }: { children: React.ReactNode }) {
   );
 }
 
-// ─── Auth Footer ──────────────────────────────────────────────
 function AuthFooter({ showTerms }: { showTerms?: boolean }) {
   return (
     <div className="px-6 py-6 text-center space-y-2">
@@ -207,18 +233,24 @@ function AuthFooter({ showTerms }: { showTerms?: boolean }) {
 }
 
 // ─── Login Page ───────────────────────────────────────────────
+type LoginStep = "identifier" | "pin" | "otp";
+
 export function LoginPage() {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
-  const [email, setEmail] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [sent, setSent] = useState(false);
+  const [step, setStep] = useState<LoginStep>("identifier");
+  const [identifier, setIdentifier] = useState(""); // email or phone
+  const [pin, setPin] = useState("");
   const [otp, setOtp] = useState("");
+  const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
   const [attempts, setAttempts] = useState(0);
   const [locked, setLocked] = useState(false);
   const [lockTimer, setLockTimer] = useState(0);
+  const [showPin, setShowPin] = useState(false);
+  const [userEmail, setUserEmail] = useState(""); // resolved email for OTP
+  const [userId, setUserId] = useState("");
 
   useEffect(() => {
     if (isAuthenticated) navigate("/dashboard", { replace: true });
@@ -241,151 +273,195 @@ export function LoginPage() {
     }
   }, [lockTimer, locked]);
 
-  const handleLockout = (newAttempts: number, retryAfter = 15 * 60) => {
-    if (newAttempts >= 5) {
+  const handleLockout = (n: number) => {
+    if (n >= 5) {
       setLocked(true);
-      setLockTimer(retryAfter);
-      toast.error("Too many attempts. Account locked for 15 minutes.");
+      setLockTimer(15 * 60);
+      toast.error("Too many attempts. Locked for 15 minutes.");
     } else {
-      toast.error(`Failed. ${5 - newAttempts} attempt${5 - newAttempts !== 1 ? "s" : ""} remaining.`);
+      toast.error(`Incorrect. ${5 - n} attempt${5 - n !== 1 ? "s" : ""} remaining.`);
     }
   };
 
-  const sendOTP = async () => {
-    if (!email.trim()) return toast.error("Enter your email address");
+  // Step 1: Check identifier and go to PIN
+  const handleIdentifier = async () => {
+    if (!identifier.trim()) return toast.error("Enter your email or phone number");
     if (locked) return toast.error(`Locked. Try again in ${Math.ceil(lockTimer / 60)}m`);
 
-    const { blocked, retryAfter } = await checkRateLimit(email.trim());
+    const { blocked, retryAfter } = await checkRateLimit(identifier.trim());
     if (blocked) {
       setLocked(true);
       setLockTimer(retryAfter);
-      toast.error(`Account locked. Try again in ${Math.ceil(retryAfter / 60)} minutes.`);
+      toast.error(`Account locked. Try in ${Math.ceil(retryAfter / 60)}m`);
       return;
     }
 
     setLoading(true);
     try {
-      // Check if email is registered
+      // Check if user exists
       const { data: exists } = await supabase.rpc("check_email_exists", {
-        p_email: email.trim(),
+        p_email: identifier.trim(),
       });
-      if (!exists) {
-        // Generic message to prevent enumeration but block login
-        await logAuthAttempt(email.trim(), "login", false, "Email not registered");
-        setSent(true);
-        setResendTimer(60);
-        return;
+
+      // Always proceed to PIN (prevent enumeration)
+      setStep("pin");
+      if (exists) {
+        // Fetch email if phone used
+        const { data: user } = await supabase
+          .from("users")
+          .select("id, email")
+          .or(`email.eq.${identifier.trim()},phone_number.eq.${identifier.trim()}`)
+          .single();
+        if (user) {
+          setUserEmail(user.email);
+          setUserId(user.id);
+        }
       }
-      const { error } = await supabase.auth.signInWithOtp({ email: email.trim() });
-      if (error) throw error;
-      await logAuthAttempt(email.trim(), "otp_request", true);
-      setSent(true);
-      setResendTimer(60);
-      toast.success("Code sent!");
-    } catch (err) {
-      const n = attempts + 1;
-      setAttempts(n);
-      await logAuthAttempt(email.trim(), "otp_request", false, (err as Error).message);
-      handleLockout(n);
     } finally {
       setLoading(false);
     }
   };
 
-  const verifyOTP = async () => {
-    if (otp.length !== 6 || verifying) return;
+  // Step 2: Verify PIN
+  const handlePIN = async () => {
+    if (pin.length !== 6) return toast.error("Enter your 6-digit PIN");
     if (locked) return toast.error(`Locked. Try again in ${Math.ceil(lockTimer / 60)}m`);
     setVerifying(true);
     try {
+      const pinHash = await hashPIN(pin);
+      const { data: result } = await supabase.rpc("verify_user_pin", {
+        p_identifier: identifier.trim(),
+        p_pin_hash: pinHash,
+      });
+
+      const user = result?.[0];
+
+      if (!user || !user.is_valid) {
+        const n = attempts + 1;
+        setAttempts(n);
+        await logAuthAttempt(identifier.trim(), "pin_login", false, "Wrong PIN");
+        setPin("");
+        handleLockout(n);
+        return;
+      }
+
+      // Check if device is trusted
+      const { data: isTrusted } = await supabase.rpc("check_trusted_device", {
+        p_identifier: identifier.trim(),
+        p_fingerprint: getDeviceFingerprint(),
+      });
+
+      if (isTrusted) {
+        // Known device — sign in with OTP silently
+        await supabase.auth.signInWithOtp({ email: userEmail });
+        setStep("otp");
+        setResendTimer(60);
+        toast.success("PIN correct! Check your email for the login code.");
+      } else {
+        // New device — require OTP verification
+        await supabase.auth.signInWithOtp({ email: userEmail });
+        setStep("otp");
+        setResendTimer(60);
+        toast.success("New device detected! Check your email to verify.");
+      }
+
+      await logAuthAttempt(identifier.trim(), "pin_login", true);
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  // Step 3: Verify OTP
+  const handleOTP = async () => {
+    if (otp.length !== 6 || verifying) return;
+    setVerifying(true);
+    try {
       const { error } = await supabase.auth.verifyOtp({
-        email: email.trim(),
+        email: userEmail,
         token: otp,
         type: "magiclink",
       });
       if (error) throw error;
-      await logAuthAttempt(email.trim(), "otp_verify", true);
 
-      // Log device session
+      await logAuthAttempt(identifier.trim(), "otp_verify", true);
+
+      // Trust this device
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { browser, os, device_name } = getDeviceInfo();
-        await supabase.from("device_sessions").upsert({
-          user_id: user.id,
-          device_fingerprint: getDeviceFingerprint(),
-          device_name,
-          browser,
-          os,
-          last_seen: new Date().toISOString(),
-        }, { onConflict: "user_id,device_fingerprint" });
-      }
+      if (user) await trustDevice(user.id);
 
       toast.success("Welcome back! 👋");
       navigate("/dashboard");
     } catch {
       const n = attempts + 1;
       setAttempts(n);
-      await logAuthAttempt(email.trim(), "otp_verify", false, "Invalid OTP");
-
-      if (n >= 5) {
-        setLocked(true);
-        setLockTimer(15 * 60);
-        toast.error("Too many failed attempts. Locked for 15 minutes.");
-        setOtp("");
-        setSent(false);
-      } else {
-        const delay = Math.min(n * 2, 10);
-        toast.error(`Invalid code. ${5 - n} attempt${5 - n !== 1 ? "s" : ""} remaining.`);
-        setTimeout(() => setOtp(""), delay * 1000);
-      }
+      await logAuthAttempt(identifier.trim(), "otp_verify", false, "Invalid OTP");
+      handleLockout(n);
+      setOtp("");
     } finally {
       setVerifying(false);
     }
   };
 
   useEffect(() => {
-    if (otp.length === 6) verifyOTP();
+    if (pin.length === 6 && step === "pin") handlePIN();
+  }, [pin]);
+
+  useEffect(() => {
+    if (otp.length === 6 && step === "otp") handleOTP();
   }, [otp]);
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col">
       <AuthHeader>
-        {sent ? (
+        {step === "identifier" && (
+          <>
+            <h1 className="text-white text-3xl font-bold mb-2">Welcome back</h1>
+            <p className="text-white/70">Sign in with your email or phone</p>
+          </>
+        )}
+        {step === "pin" && (
+          <>
+            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mb-4">
+              <Shield className="w-7 h-7 text-white" />
+            </div>
+            <h1 className="text-white text-2xl font-bold mb-1">Enter your PIN</h1>
+            <p className="text-white/70 text-sm">{identifier}</p>
+          </>
+        )}
+        {step === "otp" && (
           <>
             <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mb-4">
               <Mail className="w-7 h-7 text-white" />
             </div>
             <h1 className="text-white text-2xl font-bold mb-1">Check your email</h1>
             <p className="text-white/70 text-sm">
-              Code sent to <span className="text-white font-medium">{email}</span>
+              Code sent to <span className="text-white font-medium">{userEmail}</span>
             </p>
-          </>
-        ) : (
-          <>
-            <h1 className="text-white text-3xl font-bold mb-2">Welcome back</h1>
-            <p className="text-white/70">Sign in with your email address</p>
           </>
         )}
       </AuthHeader>
 
       <div className="flex-1 px-6 -mt-6">
         <div className="max-w-md mx-auto bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl p-6 sm:p-8">
-          {!sent ? (
+
+          {/* Step 1 — Identifier */}
+          {step === "identifier" && (
             <div className="space-y-4">
               <div>
                 <label className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">
-                  Email Address
+                  Email or Phone Number
                 </label>
                 <div className="relative">
                   <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
                   <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && sendOTP()}
-                    placeholder="you@example.com"
+                    type="text"
+                    value={identifier}
+                    onChange={(e) => setIdentifier(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleIdentifier()}
+                    placeholder="email@example.com or 08012345678"
                     disabled={locked}
                     className="w-full bg-slate-800 border border-slate-700 rounded-2xl pl-12 pr-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm disabled:opacity-50"
-                    autoComplete="email"
+                    autoComplete="username"
                   />
                 </div>
               </div>
@@ -393,13 +469,13 @@ export function LoginPage() {
               <LockWarning locked={locked} lockTimer={lockTimer} attempts={attempts} />
 
               <button
-                onClick={sendOTP}
-                disabled={loading || !email.trim() || locked}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm"
+                onClick={handleIdentifier}
+                disabled={loading || !identifier.trim() || locked}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm"
               >
                 {loading
-                  ? <><Loader2 className="w-5 h-5 animate-spin" /> Sending code…</>
-                  : "Send verification code →"
+                  ? <><Loader2 className="w-5 h-5 animate-spin" /> Checking…</>
+                  : "Continue →"
                 }
               </button>
 
@@ -416,7 +492,55 @@ export function LoginPage() {
                 Create an account
               </Link>
             </div>
-          ) : (
+          )}
+
+          {/* Step 2 — PIN */}
+          {step === "pin" && (
+            <div className="space-y-5">
+              <p className="text-slate-400 text-sm text-center">
+                Enter your 6-digit PIN to continue
+              </p>
+
+              <div className="relative">
+                <PINInput
+                  value={pin}
+                  onChange={setPin}
+                  disabled={verifying || locked}
+                  masked={!showPin}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPin(!showPin)}
+                  className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-slate-500 hover:text-slate-300 text-xs flex items-center gap-1 transition"
+                >
+                  {showPin
+                    ? <><EyeOff className="w-3 h-3" /> Hide PIN</>
+                    : <><Eye className="w-3 h-3" /> Show PIN</>
+                  }
+                </button>
+              </div>
+
+              <div className="mt-8">
+                <LockWarning locked={locked} lockTimer={lockTimer} attempts={attempts} />
+              </div>
+
+              {verifying && (
+                <div className="flex items-center justify-center gap-2 text-indigo-400 text-sm">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Verifying PIN…
+                </div>
+              )}
+
+              <button
+                onClick={() => { setStep("identifier"); setPin(""); setAttempts(0); }}
+                className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
+              >
+                <ArrowLeft className="w-4 h-4" /> Use different account
+              </button>
+            </div>
+          )}
+
+          {/* Step 3 — OTP */}
+          {step === "otp" && (
             <div className="space-y-5">
               <p className="text-slate-400 text-sm text-center">
                 Enter the 6-digit code sent to your email
@@ -439,9 +563,14 @@ export function LoginPage() {
                   </p>
                 ) : (
                   <button
-                    onClick={() => { setOtp(""); setAttempts(0); sendOTP(); }}
+                    onClick={async () => {
+                      setOtp("");
+                      await supabase.auth.signInWithOtp({ email: userEmail });
+                      setResendTimer(60);
+                      toast.success("New code sent!");
+                    }}
                     disabled={locked}
-                    className="text-indigo-400 hover:text-indigo-300 text-sm font-medium transition disabled:opacity-50"
+                    className="text-indigo-400 hover:text-indigo-300 text-sm font-medium transition"
                   >
                     Resend code
                   </button>
@@ -449,10 +578,10 @@ export function LoginPage() {
               </div>
 
               <button
-                onClick={() => { setSent(false); setOtp(""); setAttempts(0); }}
+                onClick={() => { setStep("pin"); setOtp(""); setAttempts(0); }}
                 className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
               >
-                <ArrowLeft className="w-4 h-4" /> Use different email
+                <ArrowLeft className="w-4 h-4" /> Back
               </button>
             </div>
           )}
@@ -470,17 +599,24 @@ export function LoginPage() {
 }
 
 // ─── Register Page ────────────────────────────────────────────
+type RegisterStep = "details" | "pin" | "verify";
+
 export function RegisterPage() {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
-  const [step, setStep] = useState<"details" | "verify">("details");
+  const [step, setStep] = useState<RegisterStep>("details");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [role, setRole] = useState<"owner" | "worker" | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [pin, setPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [showPin, setShowPin] = useState(false);
   const [otp, setOtp] = useState("");
+  const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
+  const [pinError, setPinError] = useState("");
 
   useEffect(() => {
     if (isAuthenticated) navigate("/dashboard", { replace: true });
@@ -493,16 +629,36 @@ export function RegisterPage() {
     }
   }, [resendTimer]);
 
-  const sendOTP = async () => {
+  const validatePIN = (p: string): string | null => {
+    if (p.length !== 6) return "PIN must be 6 digits";
+    if (/^(\d)\1{5}$/.test(p)) return "PIN cannot be all same digits (e.g. 111111)";
+    if (/^(012345|123456|234567|345678|456789|567890|098765|987654|876543|765432|654321|543210)$/.test(p))
+      return "PIN cannot be a sequential number";
+    return null;
+  };
+
+  const handleDetails = () => {
     if (!fullName.trim()) return toast.error("Enter your full name");
     if (!email.trim()) return toast.error("Enter your email address");
+    if (!phone.trim()) return toast.error("Enter your phone number");
     if (!role) return toast.error("Select your account type");
+    setStep("pin");
+  };
 
+  const handlePINSetup = () => {
+    const err = validatePIN(pin);
+    if (err) { setPinError(err); return; }
+    if (pin !== confirmPin) { setPinError("PINs do not match"); return; }
+    setPinError("");
+    sendOTP();
+  };
+
+  const sendOTP = async () => {
     setLoading(true);
     try {
       const { error } = await supabase.auth.signInWithOtp({
         email: email.trim(),
-        options: { data: { full_name: fullName.trim(), role } },
+        options: { data: { full_name: fullName.trim(), role, phone_number: phone.trim() } },
       });
       if (error) throw error;
       await logAuthAttempt(email.trim(), "otp_request", true);
@@ -527,20 +683,18 @@ export function RegisterPage() {
         type: "signup",
       });
       if (error) throw error;
-      await logAuthAttempt(email.trim(), "otp_verify", true);
 
-      // Log device session
+      // Save PIN hash and phone to user record
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        const { browser, os, device_name } = getDeviceInfo();
-        await supabase.from("device_sessions").upsert({
-          user_id: user.id,
-          device_fingerprint: getDeviceFingerprint(),
-          device_name,
-          browser,
-          os,
-          last_seen: new Date().toISOString(),
-        }, { onConflict: "user_id,device_fingerprint" });
+        const pinHash = await hashPIN(pin);
+        await supabase.from("users").update({
+          pin_hash: pinHash,
+          phone_number: phone.trim(),
+        }).eq("id", user.id);
+
+        await trustDevice(user.id);
+        await logAuthAttempt(email.trim(), "otp_verify", true);
       }
 
       toast.success("Account created! Welcome to ProFix 🎉");
@@ -565,12 +719,22 @@ export function RegisterPage() {
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col">
       <AuthHeader>
-        {step === "details" ? (
+        {step === "details" && (
           <>
             <h1 className="text-white text-3xl font-bold mb-2">Create account</h1>
             <p className="text-white/70">Join thousands of professionals</p>
           </>
-        ) : (
+        )}
+        {step === "pin" && (
+          <>
+            <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mb-4">
+              <Shield className="w-7 h-7 text-white" />
+            </div>
+            <h1 className="text-white text-2xl font-bold mb-1">Create your PIN</h1>
+            <p className="text-white/70 text-sm">You'll use this to log in quickly</p>
+          </>
+        )}
+        {step === "verify" && (
           <>
             <div className="w-14 h-14 bg-white/20 rounded-full flex items-center justify-center mb-4">
               <Mail className="w-7 h-7 text-white" />
@@ -583,11 +747,29 @@ export function RegisterPage() {
         )}
       </AuthHeader>
 
-      <div className="flex-1 px-6 -mt-6">
+      {/* Progress indicator */}
+      <div className="px-6 -mt-3 mb-2">
+        <div className="max-w-md mx-auto flex gap-2">
+          {["details", "pin", "verify"].map((s, i) => (
+            <div
+              key={s}
+              className={cn(
+                "flex-1 h-1 rounded-full transition-all",
+                ["details", "pin", "verify"].indexOf(step) >= i
+                  ? "bg-indigo-500"
+                  : "bg-slate-800"
+              )}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 px-6 mt-4">
         <div className="max-w-md mx-auto bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl p-6 sm:p-8">
-          {step === "details" ? (
+
+          {/* Step 1 — Details */}
+          {step === "details" && (
             <div className="space-y-4">
-              {/* Full name */}
               <div>
                 <label className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">Full Name</label>
                 <input
@@ -599,7 +781,6 @@ export function RegisterPage() {
                 />
               </div>
 
-              {/* Email */}
               <div>
                 <label className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">Email Address</label>
                 <div className="relative">
@@ -615,7 +796,21 @@ export function RegisterPage() {
                 </div>
               </div>
 
-              {/* Role */}
+              <div>
+                <label className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">Phone Number</label>
+                <div className="relative">
+                  <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="08012345678"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-2xl pl-12 pr-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm"
+                    autoComplete="tel"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block text-slate-400 text-xs font-medium mb-3 uppercase tracking-wider">I want to…</label>
                 <div className="grid grid-cols-2 gap-3">
@@ -643,14 +838,11 @@ export function RegisterPage() {
               </div>
 
               <button
-                onClick={sendOTP}
-                disabled={loading || !fullName.trim() || !email.trim() || !role}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm"
+                onClick={handleDetails}
+                disabled={!fullName.trim() || !email.trim() || !phone.trim() || !role}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition text-sm"
               >
-                {loading
-                  ? <><Loader2 className="w-5 h-5 animate-spin" /> Creating account…</>
-                  : "Create account →"
-                }
+                Continue →
               </button>
 
               <div className="flex items-center gap-3">
@@ -666,7 +858,87 @@ export function RegisterPage() {
                 Sign in instead
               </Link>
             </div>
-          ) : (
+          )}
+
+          {/* Step 2 — Create PIN */}
+          {step === "pin" && (
+            <div className="space-y-6">
+              <div className="space-y-5">
+                <div>
+                  <p className="text-slate-400 text-sm text-center mb-4">
+                    Create a 6-digit PIN you'll remember
+                  </p>
+                  <PINInput
+                    value={pin}
+                    onChange={(v) => { setPin(v); setPinError(""); }}
+                    masked={!showPin}
+                  />
+                </div>
+
+                <div>
+                  <p className="text-slate-400 text-sm text-center mb-4">
+                    Confirm your PIN
+                  </p>
+                  <PINInput
+                    value={confirmPin}
+                    onChange={(v) => { setConfirmPin(v); setPinError(""); }}
+                    masked={!showPin}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowPin(!showPin)}
+                  className="w-full flex items-center justify-center gap-1 text-slate-500 hover:text-slate-300 text-xs transition"
+                >
+                  {showPin
+                    ? <><EyeOff className="w-3 h-3" /> Hide PIN</>
+                    : <><Eye className="w-3 h-3" /> Show PIN</>
+                  }
+                </button>
+
+                {pinError && (
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-center">
+                    <p className="text-red-400 text-xs">{pinError}</p>
+                  </div>
+                )}
+
+                <div className="bg-slate-800 rounded-xl p-3 space-y-1">
+                  <p className="text-slate-400 text-xs font-medium">PIN requirements:</p>
+                  <p className={cn("text-xs", pin.length === 6 ? "text-emerald-400" : "text-slate-500")}>
+                    ✓ Exactly 6 digits
+                  </p>
+                  <p className={cn("text-xs", pin && !/^(\d)\1{5}$/.test(pin) ? "text-emerald-400" : "text-slate-500")}>
+                    ✓ No repeated digits (e.g. 111111)
+                  </p>
+                  <p className={cn("text-xs", pin === confirmPin && pin.length === 6 ? "text-emerald-400" : "text-slate-500")}>
+                    ✓ PINs match
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={handlePINSetup}
+                disabled={loading || pin.length !== 6 || confirmPin.length !== 6}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm"
+              >
+                {loading
+                  ? <><Loader2 className="w-5 h-5 animate-spin" /> Creating account…</>
+                  : "Create Account →"
+                }
+              </button>
+
+              <button
+                onClick={() => { setStep("details"); setPin(""); setConfirmPin(""); }}
+                className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
+              >
+                <ArrowLeft className="w-4 h-4" /> Go back
+              </button>
+            </div>
+          )}
+
+          {/* Step 3 — Verify OTP */}
+          {step === "verify" && (
             <div className="space-y-5">
               <p className="text-slate-400 text-sm text-center">
                 Enter the 6-digit code to verify your email
@@ -695,7 +967,7 @@ export function RegisterPage() {
               </div>
 
               <button
-                onClick={() => { setStep("details"); setOtp(""); }}
+                onClick={() => { setStep("pin"); setOtp(""); }}
                 className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
               >
                 <ArrowLeft className="w-4 h-4" /> Go back

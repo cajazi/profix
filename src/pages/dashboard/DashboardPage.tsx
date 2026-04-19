@@ -22,7 +22,7 @@ export function DashboardPage() {
   const { profile } = useAuthStore();
   const { notifications, unreadCount } = useNotificationStore();
   const navigate = useNavigate();
-  const isOwner = profile?.role === "owner";
+  const isOwner = profile?.role === "owner" || profile?.role === "admin";
   const isWorker = profile?.role === "worker";
 
   const { data: ownerStats } = useQuery({

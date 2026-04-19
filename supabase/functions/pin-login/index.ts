@@ -39,7 +39,7 @@ serve(async (req: Request) => {
       return errorResponse("PIN not set. Please reset your account.", 401);
     }
 
-    // Verify PIN
+    // Verify PIN hash
     if (user.pin_hash !== pin_hash) {
       return errorResponse("Incorrect PIN", 401);
     }
@@ -62,18 +62,35 @@ serve(async (req: Request) => {
         .eq("user_id", user.id)
         .eq("device_fingerprint", device_fingerprint);
 
-      // Sign in directly using admin — return session
-      const { data: sessionData, error: sessionErr } = await db.auth.admin
-        .createSession({ user_id: user.id });
+      // Generate magic link and extract token
+      const { data: linkData, error: linkErr } = await db.auth.admin.generateLink({
+        type: "magiclink",
+        email: user.email,
+      });
 
-      if (sessionErr || !sessionData) {
-        return errorResponse("Failed to create session", 500);
+      if (linkErr || !linkData) {
+        return errorResponse("Failed to generate login token", 500);
+      }
+
+      // Extract token from action link
+      const actionLink = linkData.properties?.action_link || "";
+      let token = "";
+
+      if (actionLink) {
+        try {
+          const url = new URL(actionLink);
+          // Try different token params
+          token = url.searchParams.get("token") ||
+                  url.searchParams.get("token_hash") ||
+                  url.hash.split("token=")[1]?.split("&")[0] || "";
+        } catch {
+          token = "";
+        }
       }
 
       return successResponse({
         trusted: true,
-        access_token: sessionData.session.access_token,
-        refresh_token: sessionData.session.refresh_token,
+        token,
         email: user.email,
       });
     }

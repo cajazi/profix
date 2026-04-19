@@ -366,28 +366,32 @@ export function LoginPage() {
 
       setUserEmail(data.email);
 
-      if (data.trusted && data.access_token) {
-        // Trusted device — set session directly, no OTP needed
-        const { error: sessionErr } = await supabase.auth.setSession({
-          access_token: data.access_token,
-          refresh_token: data.refresh_token,
+      setUserEmail(data.email);
+
+      if (data.trusted && data.token) {
+        // Trusted device — verify magic link token directly
+        const { error: verifyErr } = await supabase.auth.verifyOtp({
+          email: data.email,
+          token: data.token,
+          type: "magiclink",
         });
 
-        if (sessionErr) {
-          // Fallback to OTP
-          await supabase.auth.signInWithOtp({ email: data.email });
-          setStep("otp");
-          setResendTimer(60);
-          toast.success("Check your email for the login code.");
-        } else {
+        if (!verifyErr) {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) await trustDevice(user.id);
           toast.success("Welcome back! 👋");
           navigate("/dashboard");
+          return;
         }
+      }
+
+      // Fallback or new device — send OTP
+      await supabase.auth.signInWithOtp({ email: data.email });
+      setStep("otp");
+      setResendTimer(60);
+      if (data.trusted) {
+        toast.success("Quick verification needed. Check your email.");
       } else {
-        // New device — full OTP required
-        await supabase.auth.signInWithOtp({ email: data.email });
-        setStep("otp");
-        setResendTimer(60);
         toast.success("New device detected! Check your email to verify.");
       }
     } catch (err) {

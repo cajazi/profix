@@ -52,7 +52,7 @@ function PINInput({ length = 6, value, onChange, disabled, masked = true }: {
           onPaste={handlePaste}
           disabled={disabled}
           className={cn(
-            "w-11 h-13 sm:w-12 sm:h-14 text-center text-xl font-bold rounded-2xl border-2 transition-all",
+            "w-11 h-14 sm:w-12 sm:h-14 text-center text-xl font-bold rounded-2xl border-2 transition-all",
             "bg-slate-800 text-white focus:outline-none",
             value[i]
               ? "border-emerald-500 bg-emerald-500/10 text-emerald-400"
@@ -65,7 +65,6 @@ function PINInput({ length = 6, value, onChange, disabled, masked = true }: {
   );
 }
 
-// ─── OTP Input (same as PIN but always visible) ───────────────
 function OTPInput({ value, onChange, disabled }: {
   value: string;
   onChange: (v: string) => void;
@@ -163,23 +162,17 @@ async function checkRateLimit(identifier: string): Promise<{
 async function trustDevice(userId: string) {
   const { browser, os, device_name } = getDeviceInfo();
   const fingerprint = getDeviceFingerprint();
-  const trustToken = crypto.randomUUID();
-  
   await supabase.from("device_sessions").upsert({
     user_id: userId,
     device_fingerprint: fingerprint,
     device_name,
     browser,
     os,
-    trust_token: trustToken,
     last_seen: new Date().toISOString(),
   }, { onConflict: "user_id,device_fingerprint" });
-
-  // Store trust token locally
-  localStorage.setItem(`profix_trust_${fingerprint}`, trustToken);
 }
 
-// ─── Shared Components ────────────────────────────────────────
+// ─── Shared UI ────────────────────────────────────────────────
 function LockWarning({ locked, lockTimer, attempts }: {
   locked: boolean; lockTimer: number; attempts: number;
 }) {
@@ -246,7 +239,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthStore();
   const [step, setStep] = useState<LoginStep>("identifier");
-  const [identifier, setIdentifier] = useState(""); // email or phone
+  const [identifier, setIdentifier] = useState("");
   const [pin, setPin] = useState("");
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
@@ -256,8 +249,7 @@ export function LoginPage() {
   const [locked, setLocked] = useState(false);
   const [lockTimer, setLockTimer] = useState(0);
   const [showPin, setShowPin] = useState(false);
-  const [userEmail, setUserEmail] = useState(""); // resolved email for OTP
-  const [userId, setUserId] = useState("");
+  const [userEmail, setUserEmail] = useState("");
 
   useEffect(() => {
     if (isAuthenticated) navigate("/dashboard", { replace: true });
@@ -290,49 +282,34 @@ export function LoginPage() {
     }
   };
 
-  // Step 1: Check identifier and go to PIN
   const handleIdentifier = async () => {
     if (!identifier.trim()) return toast.error("Enter your email or phone number");
-    if (locked) return toast.error(`Locked. Try again in ${Math.ceil(lockTimer / 60)}m`);
-
-    const { blocked, retryAfter } = await checkRateLimit(identifier.trim());
-    if (blocked) {
-      setLocked(true);
-      setLockTimer(retryAfter);
-      toast.error(`Account locked. Try in ${Math.ceil(retryAfter / 60)}m`);
-      return;
-    }
-
+    if (locked) return;
     setLoading(true);
     try {
-      // Check if user exists
-      const { data: exists } = await supabase.rpc("check_email_exists", {
-        p_email: identifier.trim(),
-      });
-
-      // Always proceed to PIN (prevent enumeration)
-      setStep("pin");
-      if (exists) {
-        // Fetch email if phone used
-        const { data: user } = await supabase
-          .from("users")
-          .select("id, email")
-          .or(`email.eq.${identifier.trim()},phone_number.eq.${identifier.trim()}`)
-          .single();
-        if (user) {
-          setUserEmail(user.email);
-          setUserId(user.id);
-        }
+      const { blocked, retryAfter } = await checkRateLimit(identifier.trim());
+      if (blocked) {
+        setLocked(true);
+        setLockTimer(retryAfter);
+        return;
       }
+      // Fetch user email (for phone login)
+      const { data: user } = await supabase
+        .from("users")
+        .select("id, email")
+        .or(`email.eq.${identifier.trim()},phone_number.eq.${identifier.trim()}`)
+        .single();
+      if (user) setUserEmail(user.email);
+      // Always proceed to PIN (prevents enumeration)
+      setStep("pin");
     } finally {
       setLoading(false);
     }
   };
 
-  // Step 2: Verify PIN
   const handlePIN = async () => {
-    if (pin.length !== 6) return toast.error("Enter your 6-digit PIN");
-    if (locked) return toast.error(`Locked. Try again in ${Math.ceil(lockTimer / 60)}m`);
+    if (pin.length !== 6 || verifying) return;
+    if (locked) return;
     setVerifying(true);
     try {
       const pinHash = await hashPIN(pin);
@@ -363,20 +340,16 @@ export function LoginPage() {
       }
 
       await logAuthAttempt(identifier.trim(), "pin_login", true);
-
       setUserEmail(data.email);
 
-      setUserEmail(data.email);
-
-      if (data.trusted && data.token) {
-        // Trusted device — verify magic link token directly
-        const { error: verifyErr } = await supabase.auth.verifyOtp({
+      if (data.trusted) {
+        // Trusted device — sign in with password (PIN hash)
+        const { error: signInErr } = await supabase.auth.signInWithPassword({
           email: data.email,
-          token: data.token,
-          type: "magiclink",
+          password: pinHash,
         });
 
-        if (!verifyErr) {
+        if (!signInErr) {
           const { data: { user } } = await supabase.auth.getUser();
           if (user) await trustDevice(user.id);
           toast.success("Welcome back! 👋");
@@ -385,23 +358,22 @@ export function LoginPage() {
         }
       }
 
-      // Fallback or new device — send OTP
+      // New device or signInWithPassword failed — send OTP
       await supabase.auth.signInWithOtp({ email: data.email });
       setStep("otp");
       setResendTimer(60);
-      if (data.trusted) {
-        toast.success("Quick verification needed. Check your email.");
-      } else {
-        toast.success("New device detected! Check your email to verify.");
-      }
-    } catch (err) {
+      toast.success(
+        data.trusted
+          ? "Quick verification needed. Check your email."
+          : "New device detected! Check your email to verify."
+      );
+    } catch {
       toast.error("Something went wrong. Please try again.");
     } finally {
       setVerifying(false);
     }
   };
 
-  // Step 3: Verify OTP
   const handleOTP = async () => {
     if (otp.length !== 6 || verifying) return;
     setVerifying(true);
@@ -412,13 +384,9 @@ export function LoginPage() {
         type: "magiclink",
       });
       if (error) throw error;
-
       await logAuthAttempt(identifier.trim(), "otp_verify", true);
-
-      // Trust this device
       const { data: { user } } = await supabase.auth.getUser();
       if (user) await trustDevice(user.id);
-
       toast.success("Welcome back! 👋");
       navigate("/dashboard");
     } catch {
@@ -433,11 +401,11 @@ export function LoginPage() {
   };
 
   useEffect(() => {
-    if (pin.length === 6 && step === "pin") handlePIN();
+    if (pin.length === 6 && step === "pin" && !verifying) handlePIN();
   }, [pin]);
 
   useEffect(() => {
-    if (otp.length === 6 && step === "otp") handleOTP();
+    if (otp.length === 6 && step === "otp" && !verifying) handleOTP();
   }, [otp]);
 
   return (
@@ -455,7 +423,7 @@ export function LoginPage() {
               <Shield className="w-7 h-7 text-white" />
             </div>
             <h1 className="text-white text-2xl font-bold mb-1">Enter your PIN</h1>
-            <p className="text-white/70 text-sm">{identifier}</p>
+            <p className="text-white/70 text-sm truncate">{identifier}</p>
           </>
         )}
         {step === "otp" && (
@@ -464,9 +432,7 @@ export function LoginPage() {
               <Mail className="w-7 h-7 text-white" />
             </div>
             <h1 className="text-white text-2xl font-bold mb-1">Check your email</h1>
-            <p className="text-white/70 text-sm">
-              Code sent to <span className="text-white font-medium">{userEmail}</span>
-            </p>
+            <p className="text-white/70 text-sm truncate">Code sent to {userEmail}</p>
           </>
         )}
       </AuthHeader>
@@ -474,7 +440,6 @@ export function LoginPage() {
       <div className="flex-1 px-6 -mt-6">
         <div className="max-w-md mx-auto bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl p-6 sm:p-8">
 
-          {/* Step 1 — Identifier */}
           {step === "identifier" && (
             <div className="space-y-4">
               <div>
@@ -491,75 +456,47 @@ export function LoginPage() {
                     placeholder="email@example.com or 08012345678"
                     disabled={locked}
                     className="w-full bg-slate-800 border border-slate-700 rounded-2xl pl-12 pr-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm disabled:opacity-50"
-                    autoComplete="username"
                   />
                 </div>
               </div>
-
               <LockWarning locked={locked} lockTimer={lockTimer} attempts={attempts} />
-
               <button
                 onClick={handleIdentifier}
                 disabled={loading || !identifier.trim() || locked}
                 className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm"
               >
-                {loading
-                  ? <><Loader2 className="w-5 h-5 animate-spin" /> Checking…</>
-                  : "Continue →"
-                }
+                {loading ? <><Loader2 className="w-5 h-5 animate-spin" /> Checking…</> : "Continue →"}
               </button>
-
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-px bg-slate-800" />
                 <span className="text-slate-600 text-xs">New to ProFix?</span>
                 <div className="flex-1 h-px bg-slate-800" />
               </div>
-
-              <Link
-                to="/register"
-                className="block w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold py-4 rounded-2xl transition text-center text-sm"
-              >
+              <Link to="/register" className="block w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold py-4 rounded-2xl transition text-center text-sm">
                 Create an account
               </Link>
             </div>
           )}
 
-          {/* Step 2 — PIN */}
           {step === "pin" && (
-            <div className="space-y-5">
-              <p className="text-slate-400 text-sm text-center">
-                Enter your 6-digit PIN to continue
-              </p>
-
-              <div className="relative">
-                <PINInput
-                  value={pin}
-                  onChange={setPin}
-                  disabled={verifying || locked}
-                  masked={!showPin}
-                />
+            <div className="space-y-6">
+              <p className="text-slate-400 text-sm text-center">Enter your 6-digit PIN to continue</p>
+              <div className="relative pb-8">
+                <PINInput value={pin} onChange={setPin} disabled={verifying || locked} masked={!showPin} />
                 <button
                   type="button"
                   onClick={() => setShowPin(!showPin)}
-                  className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-slate-500 hover:text-slate-300 text-xs flex items-center gap-1 transition"
+                  className="absolute bottom-0 left-1/2 -translate-x-1/2 text-slate-500 hover:text-slate-300 text-xs flex items-center gap-1 transition"
                 >
-                  {showPin
-                    ? <><EyeOff className="w-3 h-3" /> Hide PIN</>
-                    : <><Eye className="w-3 h-3" /> Show PIN</>
-                  }
+                  {showPin ? <><EyeOff className="w-3 h-3" /> Hide</> : <><Eye className="w-3 h-3" /> Show</>}
                 </button>
               </div>
-
-              <div className="mt-8">
-                <LockWarning locked={locked} lockTimer={lockTimer} attempts={attempts} />
-              </div>
-
+              <LockWarning locked={locked} lockTimer={lockTimer} attempts={attempts} />
               {verifying && (
                 <div className="flex items-center justify-center gap-2 text-indigo-400 text-sm">
                   <Loader2 className="w-4 h-4 animate-spin" /> Verifying PIN…
                 </div>
               )}
-
               <button
                 onClick={() => { setStep("identifier"); setPin(""); setAttempts(0); }}
                 className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
@@ -569,23 +506,16 @@ export function LoginPage() {
             </div>
           )}
 
-          {/* Step 3 — OTP */}
           {step === "otp" && (
             <div className="space-y-5">
-              <p className="text-slate-400 text-sm text-center">
-                Enter the 6-digit code sent to your email
-              </p>
-
+              <p className="text-slate-400 text-sm text-center">Enter the 6-digit code sent to your email</p>
               <OTPInput value={otp} onChange={setOtp} disabled={verifying || locked} />
-
               <LockWarning locked={locked} lockTimer={lockTimer} attempts={attempts} />
-
               {verifying && (
                 <div className="flex items-center justify-center gap-2 text-indigo-400 text-sm">
                   <Loader2 className="w-4 h-4 animate-spin" /> Verifying…
                 </div>
               )}
-
               <div className="text-center">
                 {resendTimer > 0 ? (
                   <p className="text-slate-500 text-sm">
@@ -599,14 +529,12 @@ export function LoginPage() {
                       setResendTimer(60);
                       toast.success("New code sent!");
                     }}
-                    disabled={locked}
                     className="text-indigo-400 hover:text-indigo-300 text-sm font-medium transition"
                   >
                     Resend code
                   </button>
                 )}
               </div>
-
               <button
                 onClick={() => { setStep("pin"); setOtp(""); setAttempts(0); }}
                 className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
@@ -616,13 +544,10 @@ export function LoginPage() {
             </div>
           )}
         </div>
-
         <div className="max-w-md mx-auto mt-5 flex items-center justify-center gap-2 text-slate-600 text-xs">
-          <Shield className="w-3.5 h-3.5" />
-          256-bit SSL encrypted · Your data is safe
+          <Shield className="w-3.5 h-3.5" /> 256-bit SSL encrypted · Your data is safe
         </div>
       </div>
-
       <AuthFooter />
     </div>
   );
@@ -661,15 +586,15 @@ export function RegisterPage() {
 
   const validatePIN = (p: string): string | null => {
     if (p.length !== 6) return "PIN must be 6 digits";
-    if (/^(\d)\1{5}$/.test(p)) return "PIN cannot be all same digits (e.g. 111111)";
+    if (/^(\d)\1{5}$/.test(p)) return "PIN cannot be all same digits";
     if (/^(012345|123456|234567|345678|456789|567890|098765|987654|876543|765432|654321|543210)$/.test(p))
-      return "PIN cannot be a sequential number";
+      return "PIN cannot be sequential";
     return null;
   };
 
   const handleDetails = () => {
     if (!fullName.trim()) return toast.error("Enter your full name");
-    if (!email.trim()) return toast.error("Enter your email address");
+    if (!email.trim()) return toast.error("Enter your email");
     if (!phone.trim()) return toast.error("Enter your phone number");
     if (!role) return toast.error("Select your account type");
     setStep("pin");
@@ -714,14 +639,18 @@ export function RegisterPage() {
       });
       if (error) throw error;
 
-      // Save PIN hash and phone to user record
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const pinHash = await hashPIN(pin);
+
+        // Save PIN hash and phone
         await supabase.from("users").update({
           pin_hash: pinHash,
           phone_number: phone.trim(),
         }).eq("id", user.id);
+
+        // Set password = PIN hash so trusted devices can use signInWithPassword
+        await supabase.auth.updateUser({ password: pinHash });
 
         await trustDevice(user.id);
         await logAuthAttempt(email.trim(), "otp_verify", true);
@@ -770,95 +699,62 @@ export function RegisterPage() {
               <Mail className="w-7 h-7 text-white" />
             </div>
             <h1 className="text-white text-2xl font-bold mb-1">Verify your email</h1>
-            <p className="text-white/70 text-sm">
-              Code sent to <span className="text-white font-medium">{email}</span>
-            </p>
+            <p className="text-white/70 text-sm">Code sent to <span className="text-white font-medium">{email}</span></p>
           </>
         )}
       </AuthHeader>
 
-      {/* Progress indicator */}
-      <div className="px-6 -mt-3 mb-2">
+      {/* Progress bar */}
+      <div className="px-6 -mt-3 mb-3">
         <div className="max-w-md mx-auto flex gap-2">
           {["details", "pin", "verify"].map((s, i) => (
-            <div
-              key={s}
-              className={cn(
-                "flex-1 h-1 rounded-full transition-all",
-                ["details", "pin", "verify"].indexOf(step) >= i
-                  ? "bg-indigo-500"
-                  : "bg-slate-800"
-              )}
-            />
+            <div key={s} className={cn(
+              "flex-1 h-1 rounded-full transition-all",
+              ["details", "pin", "verify"].indexOf(step) >= i ? "bg-indigo-500" : "bg-slate-800"
+            )} />
           ))}
         </div>
       </div>
 
-      <div className="flex-1 px-6 mt-4">
+      <div className="flex-1 px-6 mt-2">
         <div className="max-w-md mx-auto bg-slate-900 rounded-3xl border border-slate-800 shadow-2xl p-6 sm:p-8">
 
-          {/* Step 1 — Details */}
           {step === "details" && (
             <div className="space-y-4">
               <div>
                 <label className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">Full Name</label>
-                <input
-                  type="text"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
+                <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)}
                   placeholder="Ifeanyichukwu Cosmas"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm"
-                />
+                  className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm" />
               </div>
-
               <div>
                 <label className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">Email Address</label>
                 <div className="relative">
                   <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@example.com"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-2xl pl-12 pr-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm"
-                    autoComplete="email"
-                  />
+                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com" autoComplete="email"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-2xl pl-12 pr-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm" />
                 </div>
               </div>
-
               <div>
                 <label className="block text-slate-400 text-xs font-medium mb-2 uppercase tracking-wider">Phone Number</label>
                 <div className="relative">
                   <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
-                  <input
-                    type="tel"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="08012345678"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-2xl pl-12 pr-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm"
-                    autoComplete="tel"
-                  />
+                  <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
+                    placeholder="08012345678" autoComplete="tel"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-2xl pl-12 pr-4 py-4 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm" />
                 </div>
               </div>
-
               <div>
                 <label className="block text-slate-400 text-xs font-medium mb-3 uppercase tracking-wider">I want to…</label>
                 <div className="grid grid-cols-2 gap-3">
                   {roles.map(({ value, label, desc, icon, activeColor }) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setRole(value)}
-                      className={cn(
-                        "flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all text-center",
-                        role === value ? activeColor : "border-slate-700 hover:border-slate-600"
-                      )}
-                    >
+                    <button key={value} type="button" onClick={() => setRole(value)}
+                      className={cn("flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all text-center",
+                        role === value ? activeColor : "border-slate-700 hover:border-slate-600")}>
                       <span className="text-2xl">{icon}</span>
                       <div>
-                        <p className={cn("font-semibold text-sm", role === value ? "text-white" : "text-slate-300")}>
-                          {label}
-                        </p>
+                        <p className={cn("font-semibold text-sm", role === value ? "text-white" : "text-slate-300")}>{label}</p>
                         <p className="text-slate-500 text-xs mt-0.5">{desc}</p>
                       </div>
                       {role === value && <CheckCircle className="w-4 h-4 text-emerald-400" />}
@@ -866,152 +762,89 @@ export function RegisterPage() {
                   ))}
                 </div>
               </div>
-
-              <button
-                onClick={handleDetails}
+              <button onClick={handleDetails}
                 disabled={!fullName.trim() || !email.trim() || !phone.trim() || !role}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition text-sm"
-              >
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition text-sm">
                 Continue →
               </button>
-
               <div className="flex items-center gap-3">
                 <div className="flex-1 h-px bg-slate-800" />
                 <span className="text-slate-600 text-xs">Already have an account?</span>
                 <div className="flex-1 h-px bg-slate-800" />
               </div>
-
-              <Link
-                to="/login"
-                className="block w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold py-4 rounded-2xl transition text-center text-sm"
-              >
+              <Link to="/login" className="block w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold py-4 rounded-2xl transition text-center text-sm">
                 Sign in instead
               </Link>
             </div>
           )}
 
-          {/* Step 2 — Create PIN */}
           {step === "pin" && (
-            <div className="space-y-6">
-              <div className="space-y-5">
-                <div>
-                  <p className="text-slate-400 text-sm text-center mb-4">
-                    Create a 6-digit PIN you'll remember
-                  </p>
-                  <PINInput
-                    value={pin}
-                    onChange={(v) => { setPin(v); setPinError(""); }}
-                    masked={!showPin}
-                  />
-                </div>
-
-                <div>
-                  <p className="text-slate-400 text-sm text-center mb-4">
-                    Confirm your PIN
-                  </p>
-                  <PINInput
-                    value={confirmPin}
-                    onChange={(v) => { setConfirmPin(v); setPinError(""); }}
-                    masked={!showPin}
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShowPin(!showPin)}
-                  className="w-full flex items-center justify-center gap-1 text-slate-500 hover:text-slate-300 text-xs transition"
-                >
-                  {showPin
-                    ? <><EyeOff className="w-3 h-3" /> Hide PIN</>
-                    : <><Eye className="w-3 h-3" /> Show PIN</>
-                  }
-                </button>
-
-                {pinError && (
-                  <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-center">
-                    <p className="text-red-400 text-xs">{pinError}</p>
-                  </div>
-                )}
-
-                <div className="bg-slate-800 rounded-xl p-3 space-y-1">
-                  <p className="text-slate-400 text-xs font-medium">PIN requirements:</p>
-                  <p className={cn("text-xs", pin.length === 6 ? "text-emerald-400" : "text-slate-500")}>
-                    ✓ Exactly 6 digits
-                  </p>
-                  <p className={cn("text-xs", pin && !/^(\d)\1{5}$/.test(pin) ? "text-emerald-400" : "text-slate-500")}>
-                    ✓ No repeated digits (e.g. 111111)
-                  </p>
-                  <p className={cn("text-xs", pin === confirmPin && pin.length === 6 ? "text-emerald-400" : "text-slate-500")}>
-                    ✓ PINs match
-                  </p>
-                </div>
+            <div className="space-y-5">
+              <div>
+                <p className="text-slate-400 text-sm text-center mb-4">Create a 6-digit PIN you'll remember</p>
+                <PINInput value={pin} onChange={(v) => { setPin(v); setPinError(""); }} masked={!showPin} />
               </div>
-
-              <button
-                onClick={handlePINSetup}
-                disabled={loading || pin.length !== 6 || confirmPin.length !== 6}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm"
-              >
-                {loading
-                  ? <><Loader2 className="w-5 h-5 animate-spin" /> Creating account…</>
-                  : "Create Account →"
-                }
+              <div>
+                <p className="text-slate-400 text-sm text-center mb-4">Confirm your PIN</p>
+                <PINInput value={confirmPin} onChange={(v) => { setConfirmPin(v); setPinError(""); }} masked={!showPin} />
+              </div>
+              <button type="button" onClick={() => setShowPin(!showPin)}
+                className="w-full flex items-center justify-center gap-1 text-slate-500 hover:text-slate-300 text-xs transition">
+                {showPin ? <><EyeOff className="w-3 h-3" /> Hide PIN</> : <><Eye className="w-3 h-3" /> Show PIN</>}
               </button>
-
-              <button
-                onClick={() => { setStep("details"); setPin(""); setConfirmPin(""); }}
-                className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
-              >
+              {pinError && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-center">
+                  <p className="text-red-400 text-xs">{pinError}</p>
+                </div>
+              )}
+              <div className="bg-slate-800 rounded-xl p-3 space-y-1">
+                <p className="text-slate-400 text-xs font-medium">PIN requirements:</p>
+                <p className={cn("text-xs", pin.length === 6 ? "text-emerald-400" : "text-slate-500")}>✓ Exactly 6 digits</p>
+                <p className={cn("text-xs", pin && !/^(\d)\1{5}$/.test(pin) ? "text-emerald-400" : "text-slate-500")}>✓ No repeated digits</p>
+                <p className={cn("text-xs", pin === confirmPin && pin.length === 6 ? "text-emerald-400" : "text-slate-500")}>✓ PINs match</p>
+              </div>
+              <button onClick={handlePINSetup}
+                disabled={loading || pin.length !== 6 || confirmPin.length !== 6}
+                className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm">
+                {loading ? <><Loader2 className="w-5 h-5 animate-spin" /> Creating account…</> : "Create Account →"}
+              </button>
+              <button onClick={() => { setStep("details"); setPin(""); setConfirmPin(""); }}
+                className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition">
                 <ArrowLeft className="w-4 h-4" /> Go back
               </button>
             </div>
           )}
 
-          {/* Step 3 — Verify OTP */}
           {step === "verify" && (
             <div className="space-y-5">
-              <p className="text-slate-400 text-sm text-center">
-                Enter the 6-digit code to verify your email
-              </p>
+              <p className="text-slate-400 text-sm text-center">Enter the 6-digit code to verify your email</p>
               <OTPInput value={otp} onChange={setOtp} disabled={verifying} />
-
               {verifying && (
                 <div className="flex items-center justify-center gap-2 text-indigo-400 text-sm">
                   <Loader2 className="w-4 h-4 animate-spin" /> Creating your account…
                 </div>
               )}
-
               <div className="text-center">
                 {resendTimer > 0 ? (
-                  <p className="text-slate-500 text-sm">
-                    Resend in <span className="text-white font-medium">{resendTimer}s</span>
-                  </p>
+                  <p className="text-slate-500 text-sm">Resend in <span className="text-white font-medium">{resendTimer}s</span></p>
                 ) : (
-                  <button
-                    onClick={() => { setOtp(""); sendOTP(); }}
-                    className="text-indigo-400 hover:text-indigo-300 text-sm font-medium transition"
-                  >
+                  <button onClick={() => { setOtp(""); sendOTP(); }}
+                    className="text-indigo-400 hover:text-indigo-300 text-sm font-medium transition">
                     Resend code
                   </button>
                 )}
               </div>
-
-              <button
-                onClick={() => { setStep("pin"); setOtp(""); }}
-                className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
-              >
+              <button onClick={() => { setStep("pin"); setOtp(""); }}
+                className="w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition">
                 <ArrowLeft className="w-4 h-4" /> Go back
               </button>
             </div>
           )}
         </div>
-
         <div className="max-w-md mx-auto mt-5 flex items-center justify-center gap-2 text-slate-600 text-xs">
-          <Shield className="w-3.5 h-3.5" />
-          256-bit SSL encrypted · Your data is safe
+          <Shield className="w-3.5 h-3.5" /> 256-bit SSL encrypted · Your data is safe
         </div>
       </div>
-
       <AuthFooter showTerms />
     </div>
   );
@@ -1029,9 +862,7 @@ export function VerifyOTPPage() {
     setVerifying(true);
     try {
       const { error } = await supabase.auth.verifyOtp({
-        email,
-        token: otp,
-        type: "magiclink",
+        email, token: otp, type: "magiclink",
       });
       if (error) throw error;
       navigate("/dashboard");
@@ -1056,15 +887,9 @@ export function VerifyOTPPage() {
         <h1 className="text-white text-2xl font-bold mb-2">Check your email</h1>
         <p className="text-slate-400 text-sm mb-8">Enter the 6-digit code we sent you</p>
         <OTPInput value={otp} onChange={setOtp} disabled={verifying} />
-        {verifying && (
-          <div className="flex justify-center mt-4">
-            <Loader2 className="w-5 h-5 text-indigo-400 animate-spin" />
-          </div>
-        )}
-        <button
-          onClick={() => navigate("/login")}
-          className="mt-8 w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition"
-        >
+        {verifying && <div className="flex justify-center mt-4"><Loader2 className="w-5 h-5 text-indigo-400 animate-spin" /></div>}
+        <button onClick={() => navigate("/login")}
+          className="mt-8 w-full flex items-center justify-center gap-2 text-slate-400 hover:text-white text-sm transition">
           <ArrowLeft className="w-4 h-4" /> Back to login
         </button>
       </div>

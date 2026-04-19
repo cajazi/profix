@@ -162,14 +162,21 @@ async function checkRateLimit(identifier: string): Promise<{
 
 async function trustDevice(userId: string) {
   const { browser, os, device_name } = getDeviceInfo();
+  const fingerprint = getDeviceFingerprint();
+  const trustToken = crypto.randomUUID();
+  
   await supabase.from("device_sessions").upsert({
     user_id: userId,
-    device_fingerprint: getDeviceFingerprint(),
+    device_fingerprint: fingerprint,
     device_name,
     browser,
     os,
+    trust_token: trustToken,
     last_seen: new Date().toISOString(),
   }, { onConflict: "user_id,device_fingerprint" });
+
+  // Store trust token locally
+  localStorage.setItem(`profix_trust_${fingerprint}`, trustToken);
 }
 
 // ─── Shared Components ────────────────────────────────────────
@@ -357,29 +364,27 @@ export function LoginPage() {
 
       await logAuthAttempt(identifier.trim(), "pin_login", true);
 
-      if (data.trusted && data.token) {
-        // Trusted device — verify token directly, no OTP needed
-        const { error } = await supabase.auth.verifyOtp({
-          email: data.email,
-          token: data.token,
-          type: "magiclink",
+      setUserEmail(data.email);
+
+      if (data.trusted && data.access_token) {
+        // Trusted device — set session directly, no OTP needed
+        const { error: sessionErr } = await supabase.auth.setSession({
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
         });
 
-        if (error) {
-          // Fallback to OTP if token verification fails
+        if (sessionErr) {
+          // Fallback to OTP
           await supabase.auth.signInWithOtp({ email: data.email });
-          setUserEmail(data.email);
           setStep("otp");
           setResendTimer(60);
           toast.success("Check your email for the login code.");
         } else {
-          await trustDevice((await supabase.auth.getUser()).data.user!.id);
           toast.success("Welcome back! 👋");
           navigate("/dashboard");
         }
       } else {
-        // New device — require OTP
-        setUserEmail(data.email);
+        // New device — full OTP required
         await supabase.auth.signInWithOtp({ email: data.email });
         setStep("otp");
         setResendTimer(60);

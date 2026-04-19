@@ -62,40 +62,23 @@ serve(async (req: Request) => {
         .eq("user_id", user.id)
         .eq("device_fingerprint", device_fingerprint);
 
-      // Generate magic link for auto-login
-      const { data: linkData, error: linkErr } = await db.auth.admin
-        .generateLink({
-          type: "magiclink",
-          email: user.email,
-        });
+      // Sign in directly using admin — return session
+      const { data: sessionData, error: sessionErr } = await db.auth.admin
+        .createSession({ user_id: user.id });
 
-      if (linkErr || !linkData) {
-        return errorResponse("Failed to generate login token", 500);
+      if (sessionErr || !sessionData) {
+        return errorResponse("Failed to create session", 500);
       }
-
-      // Extract token from link
-      const url = new URL(linkData.properties.action_link);
-      const token = url.searchParams.get("token");
 
       return successResponse({
         trusted: true,
-        token,
+        access_token: sessionData.session.access_token,
+        refresh_token: sessionData.session.refresh_token,
         email: user.email,
-        user: {
-          id: user.id,
-          full_name: user.full_name,
-          role: user.role,
-        },
       });
     }
 
-    // Untrusted device — send OTP
-    await db.auth.admin.generateLink({
-      type: "magiclink",
-      email: user.email,
-    });
-
-    // Send OTP via signInWithOtp
+    // Untrusted device — needs OTP
     return successResponse({
       trusted: false,
       email: user.email,

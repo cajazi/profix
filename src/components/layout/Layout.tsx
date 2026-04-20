@@ -4,7 +4,7 @@ import {
 import { useAuthStore, useNotificationStore } from "../../store/auth.store";
 import {
   Bell, BriefcaseBusiness, LayoutDashboard,
-  LogOut, ShieldCheck, Loader2, Wallet, Menu, X, FileText
+  LogOut, ShieldCheck, Loader2, Wallet, Menu, X, FileText, Settings
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../../lib/utils";
@@ -21,6 +21,7 @@ export function Layout() {
     { to: "/jobs", label: "Jobs", icon: BriefcaseBusiness },
     { to: "/wallet", label: "Wallet", icon: Wallet },
     { to: "/contracts", label: "Contracts", icon: FileText },
+    { to: "/settings", label: "Settings", icon: Settings },
     ...(profile?.role === "admin"
       ? [{ to: "/admin", label: "Admin", icon: ShieldCheck }]
       : []),
@@ -38,7 +39,7 @@ export function Layout() {
 
   return (
     <div className="min-h-screen bg-slate-950">
-      {/* ─── Navbar ──────────────────────────────────────── */}
+      {/* Navbar */}
       <nav className="fixed top-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 h-16">
         <div className="max-w-7xl mx-auto px-4 h-full flex items-center justify-between">
 
@@ -47,9 +48,7 @@ export function Layout() {
             <div className="w-8 h-8 bg-indigo-500 rounded-lg flex items-center justify-center">
               <span className="text-white font-black text-sm">P</span>
             </div>
-            <span className="text-white font-bold text-lg tracking-tight hidden sm:block">
-              ProFix
-            </span>
+            <span className="text-white font-bold text-lg tracking-tight hidden sm:block">ProFix</span>
           </Link>
 
           {/* Desktop nav */}
@@ -73,18 +72,15 @@ export function Layout() {
 
           {/* Right actions */}
           <div className="flex items-center gap-2">
-            {/* KYC badge */}
             {(profile?.kyc_level || 0) < 1 && (
               <Link
                 to="/kyc"
                 className="hidden sm:flex items-center gap-1 text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-1 rounded-full hover:bg-amber-500/20 transition"
               >
-                <ShieldCheck className="w-3 h-3" />
-                Verify KYC
+                <ShieldCheck className="w-3 h-3" /> Verify KYC
               </Link>
             )}
 
-            {/* Notifications bell — links to notifications page */}
             <Link
               to="/notifications"
               className="relative w-9 h-9 flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
@@ -97,7 +93,6 @@ export function Layout() {
               )}
             </Link>
 
-            {/* Profile avatar */}
             <Link
               to="/profile"
               className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-800 transition"
@@ -109,13 +104,10 @@ export function Layout() {
                 <p className="text-white text-sm font-medium leading-none truncate max-w-24">
                   {profile?.full_name}
                 </p>
-                <p className="text-slate-400 text-xs capitalize mt-0.5">
-                  {profile?.role}
-                </p>
+                <p className="text-slate-400 text-xs capitalize mt-0.5">{profile?.role}</p>
               </div>
             </Link>
 
-            {/* Sign out */}
             <button
               onClick={handleSignOut}
               className="hidden sm:flex w-9 h-9 items-center justify-center rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-800 transition"
@@ -124,7 +116,6 @@ export function Layout() {
               <LogOut className="w-4 h-4" />
             </button>
 
-            {/* Mobile menu toggle */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="md:hidden w-9 h-9 flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
@@ -166,50 +157,29 @@ export function Layout() {
                 </span>
               )}
             </Link>
-            <Link
-              to="/kyc"
-              onClick={() => setMobileMenuOpen(false)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-amber-400 hover:bg-slate-800 transition"
-            >
-              <ShieldCheck className="w-4 h-4" />
-              KYC Verification
-            </Link>
-            <Link
-              to="/profile"
-              onClick={() => setMobileMenuOpen(false)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:bg-slate-800 transition"
-            >
-              <div className="w-4 h-4 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xs font-bold">
-                {profile?.full_name?.[0]?.toUpperCase()}
-              </div>
-              My Profile
-            </Link>
             <button
               onClick={handleSignOut}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-red-400 hover:bg-slate-800 transition"
             >
-              <LogOut className="w-4 h-4" />
-              Sign out
+              <LogOut className="w-4 h-4" /> Sign out
             </button>
           </div>
         )}
       </nav>
 
-      {/* ─── Page content ────────────────────────────────── */}
+      {/* Page content */}
       <main className="pt-16 min-h-screen">
         <Outlet />
       </main>
 
-      {/* ─── Footer ──────────────────────────────────────── */}
+      {/* Footer */}
       <footer className="border-t border-slate-800 bg-slate-900/50 py-6 mt-8">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 bg-indigo-500 rounded-md flex items-center justify-center">
               <span className="text-white font-black text-xs">P</span>
             </div>
-            <span className="text-slate-400 text-sm">
-              © 2025 ProFix. All rights reserved.
-            </span>
+            <span className="text-slate-400 text-sm">© 2026 ProFix. All rights reserved.</span>
           </div>
           <div className="flex items-center gap-4 text-xs text-slate-500">
             <Link to="/privacy" className="hover:text-slate-300 transition">Privacy Policy</Link>
@@ -253,9 +223,7 @@ export function RoleGuard({ allowedRoles }: { allowedRoles: string[] }) {
             <ShieldCheck className="w-7 h-7 text-red-400" />
           </div>
           <p className="text-white font-semibold text-lg">Access Denied</p>
-          <p className="text-slate-400 text-sm mt-1">
-            You don't have permission to view this page.
-          </p>
+          <p className="text-slate-400 text-sm mt-1">You don't have permission to view this page.</p>
           <Link
             to="/dashboard"
             className="inline-block mt-4 bg-slate-800 hover:bg-slate-700 text-white text-sm px-4 py-2 rounded-lg transition"

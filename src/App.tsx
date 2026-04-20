@@ -28,6 +28,7 @@ const ProfilePage = lazy(() => import("./pages/profile/ProfilePage").then((m) =>
 const ContractsListPage = lazy(() =>
   import("./pages/contracts/ContractsListPage").then((m) => ({ default: m.ContractsListPage }))
 );
+const SettingsPage = lazy(() => import("./pages/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const NotificationsPage = lazy(() => import("./pages/notifications/NotificationsPage").then((m) => ({ default: m.NotificationsPage })));
 
 const queryClient = new QueryClient({
@@ -124,6 +125,7 @@ export default function App() {
                 <Route path="/kyc" element={<KYCPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
                 <Route path="/notifications" element={<NotificationsPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/contracts" element={<ContractsListPage />} />
                 <Route path="/admin" element={<AdminPage />} />
                 <Route path="/delete-account" element={<AccountDeletionPage />} />

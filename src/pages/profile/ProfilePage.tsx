@@ -24,6 +24,205 @@ const profileSchema = z.object({
 });
 type ProfileForm = z.infer<typeof profileSchema>;
 
+function TransactionPINSection() {
+  const { profile } = useAuthStore();
+  const [step, setStep] = useState<"idle" | "set" | "change">("idle");
+  const [pin, setPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [currentPin, setCurrentPin] = useState("");
+  const [showPin, setShowPin] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const hasPin = !!(profile as any)?.transaction_pin_hash;
+
+  const hashPIN = async (p: string): Promise<string> => {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(p + "profix_txn_salt_2026");
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  };
+
+  const validatePIN = (p: string): string | null => {
+    if (p.length !== 4) return "PIN must be 4 digits";
+    if (/^(\d)\1{3}$/.test(p)) return "PIN cannot be all same digits";
+    if (/^(0123|1234|2345|3456|4567|5678|6789|9876|8765|7654|6543|5432|4321|3210)$/.test(p))
+      return "PIN cannot be sequential";
+    return null;
+  };
+
+  const savePin = async () => {
+    const err = validatePIN(pin);
+    if (err) { setError(err); return; }
+    if (pin !== confirmPin) { setError("PINs do not match"); return; }
+
+    if (hasPin && step === "change") {
+      const currentHash = await hashPIN(currentPin);
+      if (currentHash !== (profile as any).transaction_pin_hash) {
+        setError("Current PIN is incorrect");
+        return;
+      }
+    }
+
+    setLoading(true);
+    try {
+      const pinHash = await hashPIN(pin);
+      const { error: dbErr } = await supabase
+        .from("users")
+        .update({ transaction_pin_hash: pinHash })
+        .eq("id", profile!.id);
+      if (dbErr) throw dbErr;
+      toast.success(hasPin ? "Transaction PIN updated!" : "Transaction PIN set!");
+      setStep("idle");
+      setPin(""); setConfirmPin(""); setCurrentPin(""); setError("");
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-white font-semibold">Transaction PIN</h3>
+          <p className="text-slate-400 text-xs mt-0.5">
+            {hasPin ? "4-digit PIN for approving payments" : "Set a PIN to secure your transactions"}
+          </p>
+        </div>
+        {step === "idle" && (
+          <button
+            onClick={() => setStep(hasPin ? "change" : "set")}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-4 py-2 rounded-xl transition"
+          >
+            {hasPin ? "Change PIN" : "Set PIN"}
+          </button>
+        )}
+      </div>
+
+      {step !== "idle" && (
+        <div className="space-y-4">
+          {hasPin && step === "change" && (
+            <div>
+              <p className="text-slate-400 text-xs text-center mb-3">Enter current PIN</p>
+              <div className="flex gap-2 justify-center">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <input
+                    key={i}
+                    type={showPin ? "text" : "password"}
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={currentPin[i] || ""}
+                    onChange={(e) => {
+                      if (!/^\d*$/.test(e.target.value)) return;
+                      const digits = currentPin.split("");
+                      digits[i] = e.target.value.slice(-1);
+                      setCurrentPin(digits.join(""));
+                    }}
+                    className="w-12 h-12 text-center text-lg font-bold rounded-xl border-2 bg-slate-800 text-white focus:outline-none border-slate-700 focus:border-indigo-500"
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <p className="text-slate-400 text-xs text-center mb-3">
+              {hasPin ? "Enter new PIN" : "Create 4-digit PIN"}
+            </p>
+            <div className="flex gap-2 justify-center">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <input
+                  key={i}
+                  type={showPin ? "text" : "password"}
+                  inputMode="numeric"
+                  maxLength={1}
+                  value={pin[i] || ""}
+                  onChange={(e) => {
+                    if (!/^\d*$/.test(e.target.value)) return;
+                    const digits = pin.split("");
+                    digits[i] = e.target.value.slice(-1);
+                    setPin(digits.join(""));
+                  }}
+                  className={cn(
+                    "w-12 h-12 text-center text-lg font-bold rounded-xl border-2 bg-slate-800 text-white focus:outline-none transition",
+                    pin[i] ? "border-indigo-500" : "border-slate-700 focus:border-indigo-500"
+                  )}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-slate-400 text-xs text-center mb-3">Confirm PIN</p>
+            <div className="flex gap-2 justify-center">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <input
+                  key={i}
+                  type={showPin ? "text" : "password"}
+                  inputMode="numeric"
+                  maxLength={1}
+                  value={confirmPin[i] || ""}
+                  onChange={(e) => {
+                    if (!/^\d*$/.test(e.target.value)) return;
+                    const digits = confirmPin.split("");
+                    digits[i] = e.target.value.slice(-1);
+                    setConfirmPin(digits.join(""));
+                    setError("");
+                  }}
+                  className={cn(
+                    "w-12 h-12 text-center text-lg font-bold rounded-xl border-2 bg-slate-800 text-white focus:outline-none transition",
+                    confirmPin[i] && pin[i] === confirmPin[i] ? "border-emerald-500" : "border-slate-700 focus:border-indigo-500"
+                  )}
+                />
+              ))}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowPin(!showPin)}
+            className="w-full text-center text-slate-500 hover:text-slate-300 text-xs transition"
+          >
+            {showPin ? "Hide PIN" : "Show PIN"}
+          </button>
+
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-center">
+              <p className="text-red-400 text-xs">{error}</p>
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => { setStep("idle"); setPin(""); setConfirmPin(""); setCurrentPin(""); setError(""); }}
+              className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl transition text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={savePin}
+              disabled={loading || pin.length !== 4 || confirmPin.length !== 4}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold py-3 rounded-xl transition text-sm flex items-center justify-center gap-2"
+            >
+              {loading ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</> : "Save PIN"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {step === "idle" && hasPin && (
+        <div className="flex items-center gap-2 text-emerald-400 text-sm">
+          <CheckCircle className="w-4 h-4" />
+          Transaction PIN is set and active
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ProfilePage() {
   const { profile, fetchProfile } = useAuthStore();
   const queryClient = useQueryClient();

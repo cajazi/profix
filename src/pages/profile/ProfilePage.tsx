@@ -543,6 +543,9 @@ export function ProfilePage() {
           </div>
         </div>
 
+        {/* Transaction PIN */}
+        <TransactionPINSection />
+
         {/* Danger zone */}
         <div className="bg-slate-900 border border-red-500/20 rounded-2xl p-5">
           <h3 className="text-white font-semibold mb-2">Danger Zone</h3>

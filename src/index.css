@@ -18,6 +18,22 @@
     font-family: 'DM Sans', system-ui, sans-serif;
   }
 
+  /* Light mode */
+  html.light body {
+    @apply bg-gray-50 text-gray-900;
+  }
+  html.light .bg-slate-950 { background-color: #f8fafc; }
+  html.light .bg-slate-900 { background-color: #ffffff; }
+  html.light .bg-slate-800 { background-color: #f1f5f9; }
+  html.light .bg-slate-700 { background-color: #e2e8f0; }
+  html.light .border-slate-800 { border-color: #e2e8f0; }
+  html.light .border-slate-700 { border-color: #cbd5e1; }
+  html.light .text-white { color: #0f172a; }
+  html.light .text-slate-100 { color: #1e293b; }
+  html.light .text-slate-300 { color: #334155; }
+  html.light .text-slate-400 { color: #475569; }
+  html.light .text-slate-500 { color: #64748b; }
+
   /* Custom scrollbar */
   ::-webkit-scrollbar {
     width: 6px;

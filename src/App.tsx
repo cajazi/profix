@@ -105,6 +105,7 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/verify-otp" element={<VerifyOTPPage />} />
+            <Route path="/forgot-pin" element={<ForgotPINPage />} />
             <Route path="/payment/callback" element={<PaymentCallbackPage />} />
             <Route path="/privacy" element={<PrivacyPolicyPage />} />
             <Route path="/terms" element={<TermsOfServicePage />} />

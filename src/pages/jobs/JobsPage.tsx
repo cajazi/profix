@@ -19,6 +19,10 @@ import { cn } from "../../lib/utils";
 const JOB_CATEGORIES = [
   "All", "Plumbing", "Electrical", "Carpentry", "Painting",
   "Cleaning", "Landscaping", "Roofing", "HVAC", "Security", "Tech",
+  "Building & Construction", "Tiling & Flooring", "Welding & Fabrication",
+  "Generator & Solar", "AC Repair", "Fumigation & Pest Control",
+  "Interior Design", "Moving & Logistics", "Catering & Events",
+  "Fashion & Tailoring", "Photography", "Tutoring", "Other",
 ];
 
 export function JobsPage() {
@@ -35,10 +39,7 @@ export function JobsPage() {
     queryFn: async () => {
       let query = supabase
         .from("jobs")
-        .select(
-          "*, owner:users!jobs_owner_id_fkey(id, full_name, avatar_url, rating)",
-          { count: "exact" }
-        )
+        .select("*, owner:users!jobs_owner_id_fkey(id, full_name, avatar_url, rating)", { count: "exact" })
         .eq("status", "open")
         .order("created_at", { ascending: false })
         .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
@@ -60,11 +61,9 @@ export function JobsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
           <h1 className="text-white text-2xl font-bold">Browse Jobs</h1>
-          <p className="text-slate-400 text-sm mt-0.5">
-            {data?.total || 0} open opportunities
-          </p>
+          <p className="text-slate-400 text-sm mt-0.5">{data?.total || 0} open opportunities</p>
         </div>
-        {profile?.role === "owner" && (
+        {(profile?.role === "owner" || profile?.role === "admin") && (
           <button
             onClick={() => navigate("/jobs/post")}
             className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl transition font-medium text-sm w-full sm:w-auto"
@@ -111,8 +110,7 @@ export function JobsPage() {
               : "bg-slate-800 text-slate-400 border-slate-700 hover:text-white"
           )}
         >
-          <Filter className="w-3 h-3" />
-          Remote only
+          <Filter className="w-3 h-3" /> Remote only
         </button>
       </div>
 
@@ -135,14 +133,12 @@ export function JobsPage() {
               className="bg-slate-900 border border-slate-800 rounded-2xl p-5 hover:border-indigo-500/50 transition-all group flex flex-col"
             >
               <div className="flex items-start justify-between mb-3">
-                <span className="text-xs bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded-full font-medium">
+                <span className="text-xs bg-indigo-500/10 text-indigo-400 px-2 py-0.5 rounded-full font-medium truncate max-w-32">
                   {job.category}
                 </span>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-shrink-0">
                   {job.is_remote && (
-                    <span className="text-xs bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full">
-                      Remote
-                    </span>
+                    <span className="text-xs bg-emerald-500/10 text-emerald-400 px-2 py-0.5 rounded-full">Remote</span>
                   )}
                   <span className="text-slate-500 text-xs flex items-center gap-1">
                     <Clock className="w-3 h-3" />
@@ -151,25 +147,16 @@ export function JobsPage() {
                 </div>
               </div>
 
-              {/* Job images */}
               {job.metadata?.image_urls?.length > 0 && (
                 <div className="mb-3 rounded-xl overflow-hidden aspect-video bg-slate-800">
-                  <img
-                    src={job.metadata.image_urls[0]}
-                    alt={job.title}
-                    className="w-full h-full object-cover"
-                    loading="lazy"
-                  />
+                  <img src={job.metadata.image_urls[0]} alt={job.title} className="w-full h-full object-cover" loading="lazy" />
                 </div>
               )}
 
               <h3 className="text-white font-semibold text-base mb-2 group-hover:text-indigo-300 transition line-clamp-2 flex-1">
                 {job.title}
               </h3>
-
-              <p className="text-slate-400 text-sm mb-4 line-clamp-2 leading-relaxed">
-                {job.description}
-              </p>
+              <p className="text-slate-400 text-sm mb-4 line-clamp-2 leading-relaxed">{job.description}</p>
 
               <div className="flex items-center justify-between mt-auto pt-3 border-t border-slate-800">
                 <div className="flex items-center gap-2">
@@ -180,8 +167,7 @@ export function JobsPage() {
                     </span>
                   )}
                   <span className="flex items-center gap-1 text-indigo-400 text-xs font-medium">
-                    <MessageCircle className="w-3 h-3" />
-                    Price via chat
+                    <MessageCircle className="w-3 h-3" /> Price via chat
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -226,10 +212,20 @@ const postSchema = z.object({
   title: z.string().min(5, "Title must be at least 5 characters").max(200),
   description: z.string().min(20, "Description must be at least 20 characters"),
   category: z.string().min(1, "Please select a category"),
+  custom_category: z.string().optional(),
   location: z.string().optional(),
   is_remote: z.boolean().default(false),
   skills_needed: z.string().optional(),
+}).refine((data) => {
+  if (data.category === "Other") {
+    return data.custom_category && data.custom_category.trim().length >= 2;
+  }
+  return true;
+}, {
+  message: "Please enter your custom category",
+  path: ["custom_category"],
 });
+
 type PostForm = z.infer<typeof postSchema>;
 
 // ─── Post Job Page ────────────────────────────────────────────
@@ -259,16 +255,14 @@ export function PostJobPage() {
         return;
       }
     }
-    const combined = [...images, ...files].slice(0, 4);
-    setImages(combined);
+    setImages([...images, ...files].slice(0, 4));
   };
 
   const handleVideoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     setVideoError("");
     if (!file) return;
-    const allowed = ["video/mp4", "video/quicktime", "video/webm"];
-    if (!allowed.includes(file.type)) {
+    if (!["video/mp4", "video/quicktime", "video/webm"].includes(file.type)) {
       setVideoError("Only MP4, MOV, and WEBM videos allowed");
       return;
     }
@@ -284,11 +278,14 @@ export function PostJobPage() {
     defaultValues: { is_remote: false },
   });
 
+  const selectedCategory = watch("category");
   const descriptionValue = watch("description") || "";
 
   const postMutation = useMutation({
     mutationFn: async (data: PostForm) => {
-      if (profile?.role !== "owner") throw new Error("Only owners can post jobs");
+      if (profile?.role !== "owner" && profile?.role !== "admin") {
+        throw new Error("Only owners can post jobs");
+      }
       if (images.length < 2) throw new Error("Please upload at least 2 photos");
 
       setUploadProgress(10);
@@ -298,13 +295,9 @@ export function PostJobPage() {
         const file = images[i];
         const ext = file.name.split(".").pop();
         const path = `${profile.id}/${Date.now()}_${i}.${ext}`;
-        const { error: uploadErr } = await supabase.storage
-          .from("job-media")
-          .upload(path, file, { upsert: false });
+        const { error: uploadErr } = await supabase.storage.from("job-media").upload(path, file, { upsert: false });
         if (uploadErr) throw new Error(`Image upload failed: ${uploadErr.message}`);
-        const { data: urlData } = supabase.storage
-          .from("job-media")
-          .getPublicUrl(path);
+        const { data: urlData } = supabase.storage.from("job-media").getPublicUrl(path);
         imageUrls.push(urlData.publicUrl);
         setUploadProgress(10 + Math.round(((i + 1) / images.length) * 60));
       }
@@ -313,17 +306,18 @@ export function PostJobPage() {
       if (video) {
         const ext = video.name.split(".").pop();
         const path = `${profile.id}/${Date.now()}_video.${ext}`;
-        const { error: videoErr } = await supabase.storage
-          .from("job-media")
-          .upload(path, video, { upsert: false });
+        const { error: videoErr } = await supabase.storage.from("job-media").upload(path, video, { upsert: false });
         if (videoErr) throw new Error(`Video upload failed: ${videoErr.message}`);
-        const { data: urlData } = supabase.storage
-          .from("job-media")
-          .getPublicUrl(path);
+        const { data: urlData } = supabase.storage.from("job-media").getPublicUrl(path);
         videoUrl = urlData.publicUrl;
       }
 
       setUploadProgress(80);
+
+      // Use custom category if "Other" selected
+      const finalCategory = data.category === "Other" && data.custom_category?.trim()
+        ? data.custom_category.trim()
+        : data.category;
 
       const { data: job, error } = await supabase
         .from("jobs")
@@ -331,9 +325,7 @@ export function PostJobPage() {
           owner_id: profile.id,
           title: data.title.trim(),
           description: data.description.trim(),
-          category: data.category,
-          budget_min: null,
-          budget_max: null,
+          category: finalCategory,
           location: data.location?.trim() || null,
           is_remote: data.is_remote,
           metadata: { image_urls: imageUrls, video_url: videoUrl },
@@ -368,9 +360,7 @@ export function PostJobPage() {
           <ChevronLeft className="w-4 h-4" /> Back to Jobs
         </button>
         <h1 className="text-white text-2xl font-bold">Post a Job</h1>
-        <p className="text-slate-400 text-sm mt-1">
-          Find the right professional for your project
-        </p>
+        <p className="text-slate-400 text-sm mt-1">Find the right professional for your project</p>
       </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 sm:p-6">
@@ -378,9 +368,7 @@ export function PostJobPage() {
           <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 mb-5 flex items-start gap-2">
             <span className="text-amber-400 flex-shrink-0">⚠️</span>
             <p className="text-amber-300 text-sm">
-              Complete{" "}
-              <Link to="/kyc" className="underline font-medium">KYC verification</Link>
-              {" "}to post jobs and receive payments.
+              Complete <Link to="/kyc" className="underline font-medium">KYC verification</Link> to post jobs.
             </p>
           </div>
         )}
@@ -435,6 +423,18 @@ export function PostJobPage() {
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
+              {selectedCategory === "Other" && (
+                <div className="mt-2">
+                  <input
+                    {...register("custom_category")}
+                    placeholder="e.g. Borehole Drilling, Solar Installation"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition text-sm"
+                  />
+                  {errors.custom_category && (
+                    <p className="text-red-400 text-xs mt-1">{errors.custom_category.message}</p>
+                  )}
+                </div>
+              )}
               {errors.category && <p className="text-red-400 text-xs mt-1">{errors.category.message}</p>}
             </div>
             <div>
@@ -455,7 +455,7 @@ export function PostJobPage() {
             <div>
               <p className="text-indigo-300 text-sm font-medium">Price negotiated via chat</p>
               <p className="text-indigo-400/70 text-xs mt-0.5 leading-relaxed">
-                Workers will propose their price. You negotiate and agree before a contract is created.
+                Workers propose their price. You negotiate before a contract is created.
               </p>
             </div>
           </div>
@@ -469,9 +469,7 @@ export function PostJobPage() {
             <div
               className={cn(
                 "border-2 border-dashed rounded-xl p-6 text-center transition cursor-pointer",
-                images.length > 0
-                  ? "border-indigo-500/50 bg-indigo-500/5"
-                  : "border-slate-700 hover:border-slate-600"
+                images.length > 0 ? "border-indigo-500/50 bg-indigo-500/5" : "border-slate-700 hover:border-slate-600"
               )}
               onClick={() => document.getElementById("image-upload")?.click()}
             >
@@ -495,17 +493,10 @@ export function PostJobPage() {
                 <div className="grid grid-cols-4 gap-2">
                   {images.map((img, i) => (
                     <div key={i} className="relative group">
-                      <img
-                        src={URL.createObjectURL(img)}
-                        className="w-full aspect-square object-cover rounded-lg"
-                        alt={`upload ${i + 1}`}
-                      />
+                      <img src={URL.createObjectURL(img)} className="w-full aspect-square object-cover rounded-lg" alt={`upload ${i + 1}`} />
                       <button
                         type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setImages(images.filter((_, idx) => idx !== i));
-                        }}
+                        onClick={(e) => { e.stopPropagation(); setImages(images.filter((_, idx) => idx !== i)); }}
                         className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
                       >
                         <X className="w-3 h-3 text-white" />
@@ -531,9 +522,7 @@ export function PostJobPage() {
             <div
               className={cn(
                 "border border-dashed rounded-xl px-4 py-3 flex items-center gap-3 cursor-pointer transition",
-                video
-                  ? "border-emerald-500/40 bg-emerald-500/5"
-                  : "border-slate-700 hover:border-slate-600"
+                video ? "border-emerald-500/40 bg-emerald-500/5" : "border-slate-700 hover:border-slate-600"
               )}
               onClick={() => document.getElementById("video-upload")?.click()}
             >
@@ -554,11 +543,7 @@ export function PostJobPage() {
                 }
               </div>
               {video && (
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); setVideo(null); }}
-                  className="text-red-400 hover:text-red-300 transition flex-shrink-0"
-                >
+                <button type="button" onClick={(e) => { e.stopPropagation(); setVideo(null); }} className="text-red-400 hover:text-red-300 transition flex-shrink-0">
                   <X className="w-4 h-4" />
                 </button>
               )}
@@ -597,10 +582,7 @@ export function PostJobPage() {
                 <span>{uploadProgress}%</span>
               </div>
               <div className="w-full bg-slate-800 rounded-full h-1.5">
-                <div
-                  className="bg-indigo-500 h-1.5 rounded-full transition-all"
-                  style={{ width: `${uploadProgress}%` }}
-                />
+                <div className="bg-indigo-500 h-1.5 rounded-full transition-all" style={{ width: `${uploadProgress}%` }} />
               </div>
             </div>
           )}
@@ -619,11 +601,10 @@ export function PostJobPage() {
               disabled={postMutation.isPending}
               className="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold py-3 rounded-xl transition flex items-center justify-center gap-2 text-sm"
             >
-              {postMutation.isPending ? (
-                <><Loader2 className="w-5 h-5 animate-spin" /> Posting…</>
-              ) : (
-                <><Plus className="w-4 h-4" /> Post Job</>
-              )}
+              {postMutation.isPending
+                ? <><Loader2 className="w-5 h-5 animate-spin" /> Posting…</>
+                : <><Plus className="w-4 h-4" /> Post Job</>
+              }
             </button>
           </div>
         </form>

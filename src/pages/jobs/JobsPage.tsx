@@ -84,13 +84,13 @@ export function JobsPage() {
           />
         </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+        <div className="flex flex-wrap gap-2">
           {JOB_CATEGORIES.map((cat) => (
             <button
               key={cat}
               onClick={() => { setCategory(cat); setPage(0); }}
               className={cn(
-                "flex-shrink-0 px-4 py-1.5 rounded-full text-sm font-medium transition",
+                "px-3 py-1.5 rounded-full text-xs sm:text-sm font-medium transition",
                 category === cat
                   ? "bg-indigo-600 text-white"
                   : "bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"

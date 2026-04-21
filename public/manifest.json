@@ -1,0 +1,27 @@
+{
+  "name": "ProFix - Home Services Marketplace",
+  "short_name": "ProFix",
+  "description": "Connect with trusted home service professionals in Nigeria. Post jobs, hire workers, and pay securely via escrow.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#4f46e5",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/my-profix-icon-image.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/my-profix-icon-image.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "lifestyle", "utilities"],
+  "lang": "en",
+  "dir": "ltr"
+}
